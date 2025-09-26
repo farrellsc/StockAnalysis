@@ -1,0 +1,1 @@
+TiingoKey = "0c28e636e5fd860d9cd01f073392b9216ce5b70c"
