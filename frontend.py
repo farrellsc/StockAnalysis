@@ -169,11 +169,11 @@ class Frontend:
         # Rotate date labels for better readability
         plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-        # Add statistics text box
-        self._add_statistics_box(ax_price, all_data, symbols, normalize)
-
         # Adjust layout
         plt.tight_layout()
+
+        # Add statistics text box after layout is finalized
+        self._add_statistics_box(ax_price, all_data, symbols, normalize)
 
         # Save plot if path provided
         if save_path:
@@ -193,7 +193,7 @@ class Frontend:
         return fig
 
     def _add_statistics_box(self, ax, data_dict: Dict, symbols: List[str], normalize: bool):
-        """Add a statistics box to the plot."""
+        """Add a statistics box to the plot, positioned dynamically to avoid overlap with legend."""
         if not data_dict:
             return
 
@@ -210,8 +210,25 @@ class Frontend:
 
         if stats_text:
             stats_str = " | ".join(stats_text)
+
+            # Calculate position based on legend to avoid overlap
+            legend = ax.get_legend()
+            y_position = 0.98  # Default position
+
+            if legend is not None:
+                # Estimate legend height based on number of entries
+                # Each legend entry is approximately 0.04 in axes coordinates
+                num_legend_entries = len(symbols)
+                estimated_legend_height = num_legend_entries * 0.04 + 0.02  # Base height + padding
+
+                # Position the statistics box below the estimated legend position
+                y_position = 0.98 - estimated_legend_height - 0.02  # Additional padding
+
+                # Ensure we don't go below a reasonable minimum
+                y_position = max(y_position, 0.75)
+
             # Add text box with latest values
-            ax.text(0.02, 0.98, f"Latest: {stats_str}",
+            ax.text(0.02, y_position, f"Latest: {stats_str}",
                     transform=ax.transAxes, fontsize=10,
                     verticalalignment='top', horizontalalignment='left',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
