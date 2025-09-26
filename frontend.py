@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple
 import seaborn as sns
 from datetime import datetime
+import mplcursors
 
 
 class Frontend:
@@ -180,10 +181,14 @@ class Frontend:
                         facecolor='white', edgecolor='none')
             print(f"✓ Plot saved to: {save_path}")
 
+        # Add interactive hover functionality
+        self._add_hover_functionality(ax_price, all_data, symbols, normalize)
+
         # Print summary statistics
         self._print_summary_stats(all_data, symbols, normalize)
 
         print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
+        print("💡 Hover over the lines to see detailed information")
 
         return fig
 
@@ -230,3 +235,55 @@ class Frontend:
                 print(f"{symbol:>6}: Latest: ${data.iloc[-1]:8.2f} | "
                       f"Min: ${data.min():8.2f} | Max: ${data.max():8.2f} | "
                       f"Avg: ${data.mean():8.2f}")
+
+    def _add_hover_functionality(self, ax, data_dict: Dict, symbols: List[str], normalize: bool):
+        """Add interactive hover functionality using mplcursors."""
+        if not data_dict:
+            return
+
+        # Get all the line objects from the plot
+        lines = ax.get_lines()
+
+        # Create cursor for all lines
+        cursor = mplcursors.cursor(lines, hover=True)
+
+        def on_add(sel):
+            # Get the line that was hovered over
+            line = sel.artist
+
+            # Find which symbol this line corresponds to
+            symbol = None
+            for i, (sym, data) in enumerate(zip(symbols, data_dict.values())):
+                if i < len(lines) and lines[i] == line:
+                    symbol = sym
+                    break
+
+            if symbol is None:
+                return
+
+            # Get the x (date) and y (price) values at the cursor position
+            x_val = sel.target[0]
+            y_val = sel.target[1]
+
+            # Convert matplotlib date number back to datetime
+            try:
+                date_val = mdates.num2date(x_val).strftime('%Y-%m-%d')
+            except:
+                date_val = str(x_val)
+
+            # Format the annotation text based on whether data is normalized
+            if normalize:
+                annotation_text = f"{symbol}\nDate: {date_val}\nChange: {y_val:+.2f}%"
+            else:
+                annotation_text = f"{symbol}\nDate: {date_val}\nPrice: ${y_val:.2f}"
+
+            sel.annotation.set_text(annotation_text)
+            sel.annotation.get_bbox_patch().set(boxstyle="round,pad=0.5",
+                                              facecolor="yellow",
+                                              alpha=0.8,
+                                              edgecolor="black")
+            sel.annotation.set_fontsize(10)
+
+        cursor.connect("add", on_add)
+
+        return cursor

@@ -77,7 +77,6 @@ class Database:
         Returns:
             List[str]: Sorted list of unique symbols
         """
-        self.refresh()
         return sorted(self._df['symbol'].unique().tolist())
 
     def get_sources(self) -> List[str]:
@@ -87,7 +86,6 @@ class Database:
         Returns:
             List[str]: Sorted list of unique sources
         """
-        self.refresh()
         return sorted(self._df['source'].unique().tolist())
 
     def get_date_range(self, symbol: Optional[str] = None, source: Optional[str] = None) -> Dict[str, str]:
@@ -101,7 +99,6 @@ class Database:
         Returns:
             Dict[str, str]: Dictionary with 'start_date' and 'end_date'
         """
-        self.refresh()
         df = self._df
 
         if symbol:
@@ -135,7 +132,6 @@ class Database:
         Returns:
             pd.DataFrame: Filtered data
         """
-        self.refresh()
         df = self._df.copy()
 
         # Apply filters
@@ -249,7 +245,6 @@ class Database:
         Returns:
             pd.DataFrame: Data for the specified date
         """
-        self.refresh()
         date_filter = self._df.index == pd.to_datetime(date)
         df = self._df[date_filter]
 
@@ -260,8 +255,6 @@ class Database:
 
     def info(self) -> None:
         """Print comprehensive information about the database."""
-        self.refresh()
-
         print(f"\n📊 Database Info: {self.file_path}")
         print(f"├── Total Records: {len(self._df):,}")
         print(f"├── Symbols: {len(self.get_symbols())} ({', '.join(self.get_symbols()[:5])}{'...' if len(self.get_symbols()) > 5 else ''})")
@@ -278,7 +271,6 @@ class Database:
 
     def __len__(self) -> int:
         """Return the number of records in the database."""
-        self.refresh()
         return len(self._df)
 
     def __repr__(self) -> str:
@@ -325,9 +317,6 @@ class Database:
         try:
             # Validate new data format
             self._validate_dataframe(new_df)
-
-            # Load current data
-            self.refresh()
 
             if len(self._df) > 0:
                 # Remove overlapping data to avoid duplicates
@@ -418,7 +407,6 @@ class Database:
         Returns:
             pd.DataFrame: DataFrame with dates and split factors where splits occurred
         """
-        self.refresh()
         symbol_data = self.query(symbol=symbol)
 
         if symbol_data is None or len(symbol_data) == 0:
@@ -456,7 +444,6 @@ class Database:
             If prices are [6,6,3,3,3] with split_factor=2.0 on 3rd date,
             adjusted prices become [3,3,3,3,3]
         """
-        self.refresh()
         symbol_data = self.query(symbol=symbol)
 
         if symbol_data is None or len(symbol_data) == 0:
@@ -583,36 +570,3 @@ class Database:
         price_cols = [col for col in df.columns if col not in metadata_cols]
 
         return df[price_cols] if price_cols else None
-
-
-# Convenience functions
-
-def load_database(file_path: str) -> Database:
-    """
-    Convenience function to create a Database instance.
-
-    Args:
-        file_path (str): Path to the pickled DataFrame file
-
-    Returns:
-        Database: Initialized database instance
-    """
-    return Database(file_path)
-
-
-def quick_query(file_path: str, symbol: Optional[str] = None,
-               start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-    """
-    Quick query function for one-time data access.
-
-    Args:
-        file_path (str): Path to the pickled DataFrame file
-        symbol (str, optional): Symbol to filter by
-        start_date (str, optional): Start date filter
-        end_date (str, optional): End date filter
-
-    Returns:
-        pd.DataFrame: Filtered data
-    """
-    db = Database(file_path)
-    return db.query(symbol=symbol, start_date=start_date, end_date=end_date)
