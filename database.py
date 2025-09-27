@@ -318,12 +318,18 @@ class Database:
             # Validate new data format
             self._validate_dataframe(new_df)
 
+            # Normalize timezone compatibility before operations
+            new_df = self._normalize_timezone(new_df)
+
             if len(self._df) > 0:
+                # Ensure existing data also has normalized timezone
+                existing_df = self._normalize_timezone(self._df)
+
                 # Create composite keys for fast duplicate detection
                 # Format: "SYMBOL|source|YYYY-MM-DD"
-                existing_keys = (self._df['symbol'] + '|' +
-                               self._df['source'] + '|' +
-                               self._df.index.strftime('%Y-%m-%d'))
+                existing_keys = (existing_df['symbol'] + '|' +
+                               existing_df['source'] + '|' +
+                               existing_df.index.strftime('%Y-%m-%d'))
 
                 new_keys = (new_df['symbol'] + '|' +
                            new_df['source'] + '|' +
@@ -331,7 +337,7 @@ class Database:
 
                 # Remove duplicates in one vectorized operation
                 mask = ~existing_keys.isin(new_keys)
-                filtered_existing = self._df[mask]
+                filtered_existing = existing_df[mask]
 
                 # Combine with new data
                 consolidated_df = pd.concat([filtered_existing, new_df])
@@ -346,6 +352,28 @@ class Database:
 
         except Exception as e:
             raise Exception(f"Failed to update database: {e}")
+
+    def _normalize_timezone(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize timezone handling for DataFrame index.
+        Ensures all data uses timezone-naive DatetimeIndex for consistent operations.
+        This prevents timezone comparison errors during concatenation and sorting.
+
+        Args:
+            df (pd.DataFrame): DataFrame to normalize
+
+        Returns:
+            pd.DataFrame: DataFrame with timezone-naive DatetimeIndex
+        """
+        df_copy = df.copy()
+
+        if isinstance(df_copy.index, pd.DatetimeIndex):
+            if df_copy.index.tz is not None:
+                # Convert timezone-aware index to timezone-naive by removing timezone info
+                # This preserves the actual datetime values while removing timezone complexity
+                df_copy.index = df_copy.index.tz_localize(None)
+
+        return df_copy
 
     def _validate_dataframe(self, df: pd.DataFrame) -> None:
         """Validate DataFrame format for saving."""

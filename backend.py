@@ -22,23 +22,23 @@ class Backend:
     def _get_database(self) -> Database:
         return self.database
 
-    def _get_data_from_database(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+    def _get_data_from_database(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> Optional[pd.DataFrame]:
         """Get data from database with proper error handling."""
         try:
             database = self._get_database()
-            return database.get_cached_data(symbol, start_date, end_date, source="tiingo")
+            return database.get_cached_data(symbol, start_date, end_date, source=source)
         except Exception as e:
             raise Exception(f"Failed to access database: {e}")
 
-    def has_data_for_period(self, symbol: str, start_date: str, end_date: str) -> bool:
+    def has_data_for_period(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> bool:
         """Check if data exists for the specified period."""
         try:
             database = self._get_database()
-            return database.has_data(symbol, start_date, end_date, source="tiingo")
+            return database.has_data(symbol, start_date, end_date, source=source)
         except Exception:
             return False
 
-    def get_daily_price(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_daily_price(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> pd.DataFrame:
         """
         Get daily price data from database only.
 
@@ -46,6 +46,7 @@ class Backend:
             symbol (str): Stock symbol
             start_date (str): Start date in 'YYYY-MM-DD' format
             end_date (str): End date in 'YYYY-MM-DD' format
+            source (str, optional): Data source to filter by. If None, searches all sources.
 
         Returns:
             pd.DataFrame: Daily price data
@@ -62,7 +63,7 @@ class Backend:
             raise ValueError("End date is required")
 
         # Get data from database
-        data = self._get_data_from_database(symbol, start_date, end_date)
+        data = self._get_data_from_database(symbol, start_date, end_date, source=source)
 
         if data is None or len(data) == 0:
             available_symbols = self.get_available_symbols()
@@ -73,7 +74,7 @@ class Backend:
                 )
             else:
                 # Symbol exists but no data for date range
-                date_range = self.get_date_range_for_symbol(symbol)
+                date_range = self.get_date_range_for_symbol(symbol, source=source)
                 raise ValueError(
                     f"No data found for {symbol.upper()} in range {start_date} to {end_date}. "
                     f"Available data range: {date_range.get('start_date', 'N/A')} to {date_range.get('end_date', 'N/A')}"
@@ -82,11 +83,11 @@ class Backend:
         print(f"📂 Retrieved {len(data)} days of data for {symbol.upper()} from database")
         return self._format_output_dataframe(data)
 
-    def get_date_range_for_symbol(self, symbol: str) -> Dict[str, str]:
+    def get_date_range_for_symbol(self, symbol: str, source: Optional[str] = None) -> Dict[str, str]:
         """Get available date range for a specific symbol."""
         try:
             database = self._get_database()
-            return database.get_date_range(symbol=symbol, source="tiingo")
+            return database.get_date_range(symbol=symbol, source=source)
         except Exception:
             return {'start_date': None, 'end_date': None}
 
@@ -135,20 +136,20 @@ class Backend:
         except Exception:
             return []
 
-    def get_data_summary(self, symbol: str = None) -> Dict:
+    def get_data_summary(self, symbol: str = None, source: Optional[str] = None) -> Dict:
         """Get summary statistics for stored data."""
         try:
             database = self._get_database()
-            return database.get_summary_stats(symbol=symbol)
+            return database.get_summary_stats(symbol=symbol, source=source)
         except Exception:
             return {}
 
     def export_data(self, output_path: str, symbol: str = None,
-                   start_date: str = None, end_date: str = None) -> str:
+                   start_date: str = None, end_date: str = None, source: Optional[str] = None) -> str:
         """Export data to CSV file."""
         try:
             database = self._get_database()
-            return database.export_to_csv(output_path, symbol=symbol, source="tiingo",
+            return database.export_to_csv(output_path, symbol=symbol, source=source,
                                         start_date=start_date, end_date=end_date)
         except Exception as e:
             raise Exception(f"Export failed: {e}")
@@ -161,12 +162,13 @@ class Backend:
         except Exception as e:
             print(f"📊 Database access error: {e}")
 
-    def check_data_coverage(self, symbol: str = None) -> Dict:
+    def check_data_coverage(self, symbol: str = None, source: Optional[str] = None) -> Dict:
         """
         Check data coverage for symbols in the database.
 
         Args:
             symbol (str, optional): Check specific symbol, or all if None
+            source (str, optional): Data source to filter by. If None, searches all sources.
 
         Returns:
             Dict: Coverage information
@@ -183,8 +185,8 @@ class Backend:
 
             coverage = {}
             for sym in symbols_to_check:
-                date_range = database.get_date_range(symbol=sym, source="tiingo")
-                symbol_data = database.query(symbol=sym, source="tiingo")
+                date_range = database.get_date_range(symbol=sym, source=source)
+                symbol_data = database.query(symbol=sym, source=source)
 
                 coverage[sym] = {
                     'start_date': date_range.get('start_date'),
@@ -199,13 +201,14 @@ class Backend:
             print(f"Error checking data coverage: {e}")
             return {}
 
-    def get_latest_data(self, symbol: str, n_days: int = 5) -> pd.DataFrame:
+    def get_latest_data(self, symbol: str, n_days: int = 5, source: Optional[str] = None) -> pd.DataFrame:
         """
         Get the most recent n days of data for a symbol.
 
         Args:
             symbol (str): Stock symbol
             n_days (int): Number of recent days to retrieve
+            source (str, optional): Data source to filter by. If None, searches all sources.
 
         Returns:
             pd.DataFrame: Latest data
@@ -215,7 +218,7 @@ class Backend:
         """
         try:
             database = self._get_database()
-            data = database.get_latest_data(symbol=symbol, source="tiingo", n_days=n_days)
+            data = database.get_latest_data(symbol=symbol, source=source, n_days=n_days)
 
             if data is None or len(data) == 0:
                 raise ValueError(f"No recent data found for {symbol.upper()}")
