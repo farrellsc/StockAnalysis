@@ -115,18 +115,18 @@ class Database:
         }
 
     def query(self, symbol: Optional[Union[str, List[str]]] = None,
-              source: Optional[str] = None,
               start_date: Optional[str] = None,
               end_date: Optional[str] = None,
+              source: Optional[str] = None,
               columns: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Query data with flexible filtering options.
 
         Args:
             symbol (str or List[str], optional): Symbol(s) to filter by
-            source (str, optional): Data source to filter by
             start_date (str, optional): Start date in 'YYYY-MM-DD' format
             end_date (str, optional): End date in 'YYYY-MM-DD' format
+            source (str, optional): Data source to filter by
             columns (List[str], optional): Specific columns to return
 
         Returns:
@@ -306,7 +306,7 @@ class Database:
     def update_data(self, new_df: pd.DataFrame) -> None:
         """
         Update database by merging new data with existing data.
-        Removes duplicates for same symbol/source/date combinations.
+        Removes duplicates for same symbol/source/date combinations using vectorized operations.
 
         Args:
             new_df (pd.DataFrame): New data to merge
@@ -319,21 +319,23 @@ class Database:
             self._validate_dataframe(new_df)
 
             if len(self._df) > 0:
-                # Remove overlapping data to avoid duplicates
-                for _, new_row in new_df.iterrows():
-                    symbol = new_row['symbol']
-                    source = new_row['source']
-                    date = new_row.name  # Index value (date)
+                # Create composite keys for fast duplicate detection
+                # Format: "SYMBOL|source|YYYY-MM-DD"
+                existing_keys = (self._df['symbol'] + '|' +
+                               self._df['source'] + '|' +
+                               self._df.index.strftime('%Y-%m-%d'))
 
-                    # Remove existing data for same symbol/source/date
-                    mask = ~((self._df['symbol'] == symbol) &
-                             (self._df['source'] == source) &
-                             (self._df.index == date))
-                    self._df = self._df[mask]
+                new_keys = (new_df['symbol'] + '|' +
+                           new_df['source'] + '|' +
+                           new_df.index.strftime('%Y-%m-%d'))
+
+                # Remove duplicates in one vectorized operation
+                mask = ~existing_keys.isin(new_keys)
+                filtered_existing = self._df[mask]
 
                 # Combine with new data
-                consolidated_df = pd.concat([self._df, new_df])
-                print(f"📊 Merged data: {len(self._df)} existing + {len(new_df)} new = {len(consolidated_df)} total rows")
+                consolidated_df = pd.concat([filtered_existing, new_df])
+                print(f"📊 Merged data: {len(filtered_existing)} existing + {len(new_df)} new = {len(consolidated_df)} total rows")
             else:
                 consolidated_df = new_df
                 print(f"📊 Created new dataset with {len(consolidated_df)} rows")
