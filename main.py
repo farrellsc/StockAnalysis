@@ -60,10 +60,13 @@ def plot_prices(symbols: List[str], start_date: str, end_date: str,
 
 
 @register
-def plot_prices_simple(dataframes: DataFrame, symbols: List[str], start_date: str, end_date: str,
+def plot_prices_simple(dataframes: List[DataFrame], symbols: List[str], start_date: str, end_date: str,
                          normalize: bool = False, show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
+    for i in range(len(dataframes)):
+        dataframes[i] = dataframes[i][start_date:end_date]
+
     # Initialize backend and frontend
     frontend = Frontend()
 
@@ -75,6 +78,55 @@ def plot_prices_simple(dataframes: DataFrame, symbols: List[str], start_date: st
         symbols=symbols,
         price_column=price_column,
         normalize=normalize,
+        show_volume=show_volume,
+        title=plot_title,
+        save_path=save_path
+    )
+
+    if not save_path:
+        plt.show()
+
+    return dataframes
+
+
+@register
+def plot_prices_projected(symbols: List[str], percents: List[float], start_date: str, end_date: str,
+                         show_volume: bool = False,
+                         price_column: str = 'Close', save_path: str = None,
+                         title: str = None):
+    if sum(percents) != 1:
+        raise ValueError("percents must sum to 1.")
+    if len(symbols) != len(percents):
+        raise ValueError("symbols must have same length as percents.")
+
+    # Initialize backend and frontend
+    frontend = Frontend()
+    backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
+
+    # Fetch data for multiple stocks
+    dataframes = []
+
+    for symbol in symbols:
+        df = backend.get_daily_price(symbol, start_date, end_date, normalize=True)
+        dataframes.append(df)
+
+    aggregated_price = dataframes[0][price_column] * percents[0]
+    for i in range(1, len(dataframes)):
+        aggregated_price = aggregated_price + dataframes[i][price_column] * percents[i]
+    aggregated_price = DataFrame(aggregated_price)
+    aggregated_symbol = "+".join([f'[{p:.2f}% {s}]'for s, p in zip(symbols, percents)])
+    aggregated_price['symbol'] = aggregated_symbol
+    dataframes.append(aggregated_price)
+    symbols.append(aggregated_symbol)
+
+    # Create comparison plot
+    plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
+
+    fig = frontend.plot_price_comparison(
+        dataframes=dataframes,
+        symbols=symbols,
+        price_column=price_column,
+        normalize=False,
         show_volume=show_volume,
         title=plot_title,
         save_path=save_path

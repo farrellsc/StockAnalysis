@@ -38,7 +38,7 @@ class Backend:
         except Exception:
             return False
 
-    def get_daily_price(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> pd.DataFrame:
+    def get_daily_price(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None, normalize: bool = False) -> pd.DataFrame:
         """
         Get daily price data from database only.
 
@@ -47,9 +47,10 @@ class Backend:
             start_date (str): Start date in 'YYYY-MM-DD' format
             end_date (str): End date in 'YYYY-MM-DD' format
             source (str, optional): Data source to filter by. If None, searches all sources.
+            normalize (bool): If True, normalize to percentage change from first value. Default is False.
 
         Returns:
-            pd.DataFrame: Daily price data
+            pd.DataFrame: Daily price data, optionally normalized
 
         Raises:
             ValueError: If inputs are invalid or data not found
@@ -81,7 +82,13 @@ class Backend:
                 )
 
         print(f"📂 Retrieved {len(data)} days of data for {symbol.upper()} from database")
-        return self._format_output_dataframe(data)
+        formatted_data = self._format_output_dataframe(data)
+
+        # Apply normalization if requested
+        if normalize:
+            formatted_data = self._normalize_data(formatted_data, 'first')
+
+        return formatted_data
 
     def get_date_range_for_symbol(self, symbol: str, source: Optional[str] = None) -> Dict[str, str]:
         """Get available date range for a specific symbol."""
@@ -127,6 +134,36 @@ class Backend:
 
         final_columns = available_columns + available_adj_columns
         return df_formatted[final_columns].copy() if final_columns else df_formatted
+
+    def _normalize_data(self, df: pd.DataFrame, method: str) -> pd.DataFrame:
+        """
+        Normalize price data to percentage change from first value.
+
+        Args:
+            df (pd.DataFrame): DataFrame with price data
+            method (str): Normalization method (only 'first' is supported)
+
+        Returns:
+            pd.DataFrame: Normalized DataFrame
+        """
+        # Only normalize numeric price columns, preserve volume and other columns as-is
+        price_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+        numeric_columns = [col for col in price_columns if col in df.columns]
+
+        if not numeric_columns:
+            return df
+
+        df_normalized = df.copy()
+
+        # Normalize to percentage change from first value
+        for col in numeric_columns:
+            first_val = df[col].iloc[0]
+            if first_val != 0:  # Avoid division by zero
+                df_normalized[col] = df[col] / first_val
+            else:
+                df_normalized[col] = 1
+
+        return df_normalized
 
     def get_available_symbols(self) -> List[str]:
         """Get all symbols available in the database."""
