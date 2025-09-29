@@ -34,6 +34,29 @@ class Frontend:
 
         print(f"✓ Frontend initialized with style: {style}")
 
+    def create_figure(self, show_volume: bool = True, figsize: Tuple[int, int] = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]:
+        """
+        Create a new figure and axes for plotting.
+
+        Args:
+            show_volume (bool): If True, create subplot for volume
+            figsize (tuple, optional): Figure size override
+
+        Returns:
+            Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]: Figure and axes objects (fig, ax_price, ax_volume)
+        """
+        fig_size = figsize or self.default_figsize
+
+        if show_volume:
+            fig, (ax_price, ax_volume) = plt.subplots(2, 1, figsize=fig_size,
+                                                      gridspec_kw={'height_ratios': [3, 1]},
+                                                      sharex=True)
+        else:
+            fig, ax_price = plt.subplots(1, 1, figsize=fig_size)
+            ax_volume = None
+
+        return fig, ax_price, ax_volume
+
     def plot_price_comparison(self,
                               dataframes: List[pd.DataFrame],
                               symbols: List[str],
@@ -42,7 +65,10 @@ class Frontend:
                               show_volume: bool = True,
                               title: str = None,
                               save_path: str = None,
-                              figsize: Tuple[int, int] = None) -> plt.Figure:
+                              figsize: Tuple[int, int] = None,
+                              fig: plt.Figure = None,
+                              ax_price: plt.Axes = None,
+                              ax_volume: plt.Axes = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]:
         """
         Plot multiple stocks on the same graph for comparison.
 
@@ -55,9 +81,12 @@ class Frontend:
             title (str, optional): Custom title for the plot
             save_path (str, optional): Path to save the plot
             figsize (tuple, optional): Figure size override
+            fig (plt.Figure, optional): Existing figure to add to
+            ax_price (plt.Axes, optional): Existing price axes to add to
+            ax_volume (plt.Axes, optional): Existing volume axes to add to
 
         Returns:
-            plt.Figure: The matplotlib figure object
+            Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]: Figure and axes objects (fig, ax_price, ax_volume)
 
         Raises:
             ValueError: If dataframes and symbols lists don't match or are empty
@@ -73,22 +102,32 @@ class Frontend:
             available_cols = list(dataframes[0].columns)
             raise ValueError(f"Column '{price_column}' not found. Available columns: {available_cols}")
 
-        # Set figure size
-        fig_size = figsize or self.default_figsize
+        # Use existing figure/axes or create new ones
+        if fig is None or ax_price is None:
+            # Set figure size
+            fig_size = figsize or self.default_figsize
 
-        # Create subplots
-        if show_volume:
-            fig, (ax_price, ax_volume) = plt.subplots(2, 1, figsize=fig_size,
-                                                      gridspec_kw={'height_ratios': [3, 1]},
-                                                      sharex=True)
+            # Create subplots
+            if show_volume:
+                fig, (ax_price, ax_volume) = plt.subplots(2, 1, figsize=fig_size,
+                                                          gridspec_kw={'height_ratios': [3, 1]},
+                                                          sharex=True)
+            else:
+                fig, ax_price = plt.subplots(1, 1, figsize=fig_size)
+                ax_volume = None
         else:
-            fig, ax_price = plt.subplots(1, 1, figsize=fig_size)
-            ax_volume = None
+            # Use existing axes - if show_volume is True but ax_volume is None,
+            # we'll just plot on the existing price axis
+            if show_volume and ax_volume is None:
+                print("⚠️  show_volume=True but no ax_volume provided, skipping volume plot")
 
         print(f"📈 Plotting comparison chart for {len(symbols)} symbols...")
 
         # Track data for statistics
         all_data = {}
+
+        # Determine starting color index based on existing lines
+        existing_lines = len(ax_price.get_lines())
 
         # Plot each stock
         for i, (df, symbol) in enumerate(zip(dataframes, symbols)):
@@ -103,16 +142,19 @@ class Frontend:
                 print(f"⚠️  Skipping {symbol}: No valid price data")
                 continue
 
+            # Calculate color index for this line
+            color_idx = (existing_lines + i) % len(self.colors)
+
             # Normalize prices if requested
             if normalize:
                 # Convert to percentage change from first day
                 normalized_data = (price_data / price_data.iloc[0] - 1) * 100
                 ax_price.plot(price_data.index, normalized_data,
-                              label=f"{symbol}", linewidth=2, color=self.colors[i % len(self.colors)])
+                              label=f"{symbol}", linewidth=2, color=self.colors[color_idx])
                 all_data[symbol] = normalized_data
             else:
                 ax_price.plot(price_data.index, price_data,
-                              label=f"{symbol}", linewidth=2, color=self.colors[i % len(self.colors)])
+                              label=f"{symbol}", linewidth=2, color=self.colors[color_idx])
                 all_data[symbol] = price_data
 
             # Plot volume if requested
@@ -120,57 +162,66 @@ class Frontend:
                 volume_data = df['Volume'].dropna()
                 if not volume_data.empty:
                     ax_volume.bar(volume_data.index, volume_data,
-                                  alpha=0.6, color=self.colors[i % len(self.colors)],
+                                  alpha=0.6, color=self.colors[color_idx],
                                   label=f"{symbol}", width=1)
 
-        # Configure price subplot
-        if normalize:
-            ax_price.set_ylabel('Percentage Change (%)', fontsize=12, fontweight='bold')
-            ax_price.axhline(y=0, color='black', linestyle='--', alpha=0.3)
-            plot_title = title or f"Normalized Price Comparison ({price_column})"
-        else:
-            ax_price.set_ylabel(f'{price_column} Price ($)', fontsize=12, fontweight='bold')
-            plot_title = title or f"Price Comparison ({price_column})"
-
-        ax_price.set_title(plot_title, fontsize=16, fontweight='bold', pad=20)
-        ax_price.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
-        ax_price.grid(True, alpha=0.3)
-
-        # Format x-axis dates
-        ax_price.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        date_range_days = (dataframes[0].index.max() - dataframes[0].index.min()).days
-
-        if date_range_days <= 30:
-            ax_price.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, date_range_days // 10)))
-        elif date_range_days <= 90:
-            ax_price.xaxis.set_major_locator(mdates.WeekdayLocator(interval=1))
-        elif date_range_days <= 365:
-            ax_price.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-        else:
-            # For very long ranges
-            if date_range_days <= 1095:  # 3 years
-                ax_price.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        # Configure price subplot (only set labels/title if this is a new plot)
+        if existing_lines == 0:
+            if normalize:
+                ax_price.set_ylabel('Percentage Change (%)', fontsize=12, fontweight='bold')
+                ax_price.axhline(y=0, color='black', linestyle='--', alpha=0.3)
+                plot_title = title or f"Normalized Price Comparison ({price_column})"
             else:
-                ax_price.xaxis.set_major_locator(mdates.YearLocator())
+                ax_price.set_ylabel(f'{price_column} Price ($)', fontsize=12, fontweight='bold')
+                plot_title = title or f"Price Comparison ({price_column})"
 
-        # Configure volume subplot if shown
-        if show_volume and ax_volume is not None:
+            ax_price.set_title(plot_title, fontsize=16, fontweight='bold', pad=20)
+            ax_price.grid(True, alpha=0.3)
+
+        # Always update legend to include new symbols
+        ax_price.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
+
+        # Format x-axis dates (only on first call)
+        if existing_lines == 0:
+            ax_price.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            date_range_days = (dataframes[0].index.max() - dataframes[0].index.min()).days
+
+            if date_range_days <= 30:
+                ax_price.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, date_range_days // 10)))
+            elif date_range_days <= 90:
+                ax_price.xaxis.set_major_locator(mdates.WeekdayLocator(interval=1))
+            elif date_range_days <= 365:
+                ax_price.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+            else:
+                # For very long ranges
+                if date_range_days <= 1095:  # 3 years
+                    ax_price.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+                else:
+                    ax_price.xaxis.set_major_locator(mdates.YearLocator())
+
+        # Configure volume subplot if shown (only on first call)
+        if existing_lines == 0 and show_volume and ax_volume is not None:
             ax_volume.set_ylabel('Volume', fontsize=12, fontweight='bold')
             ax_volume.set_xlabel('Date', fontsize=12, fontweight='bold')
             ax_volume.grid(True, alpha=0.3)
             ax_volume.ticklabel_format(style='scientific', axis='y', scilimits=(0, 0))
-
-            # Only show legend if multiple stocks
-            if len(symbols) > 1:
-                ax_volume.legend(loc='upper right', frameon=True)
-        else:
+        elif existing_lines == 0 and not show_volume:
             ax_price.set_xlabel('Date', fontsize=12, fontweight='bold')
 
-        # Rotate date labels for better readability
-        plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        # Update volume legend if we have multiple series
+        if show_volume and ax_volume is not None:
+            existing_volume_legend = ax_volume.get_legend()
+            total_volume_series = len([child for child in ax_volume.get_children() if hasattr(child, 'get_label') and child.get_label() and child.get_label() != '_nolegend_'])
+            if total_volume_series > 1:
+                ax_volume.legend(loc='upper right', frameon=True)
 
-        # Adjust layout
-        plt.tight_layout()
+        # Rotate date labels for better readability (only on first call)
+        if existing_lines == 0:
+            plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+        # Adjust layout (only on first call)
+        if existing_lines == 0:
+            plt.tight_layout()
 
         # Add statistics text box after layout is finalized
         self._add_statistics_box(ax_price, all_data, symbols, normalize)
@@ -189,8 +240,34 @@ class Frontend:
 
         print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
         print("💡 Hover over the lines to see detailed information")
+        print("💡 Use plt.show() to display the plot when ready")
 
-        return fig
+        return fig, ax_price, ax_volume
+
+    def show_plot(self, fig: plt.Figure = None):
+        """
+        Display the plot(s). If no figure is provided, shows all current figures.
+
+        Args:
+            fig (plt.Figure, optional): Specific figure to show
+        """
+        if fig is not None:
+            fig.show()
+        else:
+            plt.show()
+
+    def save_plot(self, fig: plt.Figure, save_path: str, dpi: int = 300):
+        """
+        Save a plot to file.
+
+        Args:
+            fig (plt.Figure): Figure to save
+            save_path (str): Path to save the plot
+            dpi (int): DPI for saved image
+        """
+        fig.savefig(save_path, dpi=dpi, bbox_inches='tight',
+                   facecolor='white', edgecolor='none')
+        print(f"✓ Plot saved to: {save_path}")
 
     def _add_statistics_box(self, ax, data_dict: Dict, symbols: List[str], normalize: bool):
         """Add a statistics box to the plot, positioned dynamically to avoid overlap with legend."""
