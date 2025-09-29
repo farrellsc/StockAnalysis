@@ -29,6 +29,7 @@ def plot_prices(symbols: List[str], start_date: str, end_date: str,
                          normalize: bool = False, show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
+    """An API to plot curves by reading the database with input symbols. """
     # Initialize backend and frontend
     frontend = Frontend()
     backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
@@ -64,6 +65,7 @@ def plot_prices_simple(dataframes: List[DataFrame], symbols: List[str], start_da
                          normalize: bool = False, show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
+    """An API to plot curves based on input dataframes and symbols. This API does not access database"""
     for i in range(len(dataframes)):
         dataframes[i] = dataframes[i][start_date:end_date]
 
@@ -90,14 +92,15 @@ def plot_prices_simple(dataframes: List[DataFrame], symbols: List[str], start_da
 
 
 @register
-def plot_prices_projected(symbols: List[str], percents: List[float], start_date: str, end_date: str,
+def plot_prices_projected(symbols: List[str], weights: List[float], start_date: str, end_date: str,
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
-    if sum(percents) != 1:
-        raise ValueError("percents must sum to 1.")
-    if len(symbols) != len(percents):
-        raise ValueError("symbols must have same length as percents.")
+    """An API to read symbol prices and combining them with "weights" to generate the projected performance of a proposed portfolio. Note that this API always normalizes prices to make them comparable."""
+    if sum(weights) != 1:
+        raise ValueError("weights must sum to 1.")
+    if len(symbols) != len(weights):
+        raise ValueError("symbols must have same length as weights.")
 
     # Initialize backend and frontend
     frontend = Frontend()
@@ -110,11 +113,11 @@ def plot_prices_projected(symbols: List[str], percents: List[float], start_date:
         df = backend.get_daily_price(symbol, start_date, end_date, normalize=True)
         dataframes.append(df)
 
-    aggregated_price = dataframes[0][price_column] * percents[0]
+    aggregated_price = dataframes[0][price_column] * weights[0]
     for i in range(1, len(dataframes)):
-        aggregated_price = aggregated_price + dataframes[i][price_column] * percents[i]
+        aggregated_price = aggregated_price + dataframes[i][price_column] * weights[i]
     aggregated_price = DataFrame(aggregated_price)
-    aggregated_symbol = "+".join([f'[{p:.2f}% {s}]'for s, p in zip(symbols, percents)])
+    aggregated_symbol = "+".join([f'[{p:.2f}% {s}]'for s, p in zip(symbols, weights)])
     aggregated_price['symbol'] = aggregated_symbol
     dataframes.append(aggregated_price)
     symbols.append(aggregated_symbol)
