@@ -63,7 +63,7 @@ class Frontend:
             ValueError: If dataframes and symbols lists don't match or are empty
         """
         # Input validation
-        if not dataframes or not symbols:
+        if dataframes is None or not symbols:
             raise ValueError("Dataframes and symbols lists cannot be empty")
 
         if len(dataframes) != len(symbols):

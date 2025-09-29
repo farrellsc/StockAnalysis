@@ -2,6 +2,10 @@
 import argparse
 import matplotlib.pyplot as plt
 from datetime import datetime
+import inspect
+import json
+
+from pandas import DataFrame
 
 from database import Database
 from frontend import Frontend
@@ -21,7 +25,7 @@ def register(f):
 
 
 @register
-def plot_price_comparison(symbols: List[str], start_date: str, end_date: str,
+def plot_prices(symbols: List[str], start_date: str, end_date: str,
                          normalize: bool = False, show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
@@ -51,6 +55,42 @@ def plot_price_comparison(symbols: List[str], start_date: str, end_date: str,
 
     if not save_path:
         plt.show()
+
+    return dataframes
+
+
+@register
+def plot_prices_simple(dataframes: DataFrame, symbols: List[str], start_date: str, end_date: str,
+                         normalize: bool = False, show_volume: bool = False,
+                         price_column: str = 'Close', save_path: str = None,
+                         title: str = None):
+    # Initialize backend and frontend
+    frontend = Frontend()
+
+    # Create comparison plot
+    plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
+
+    fig = frontend.plot_price_comparison(
+        dataframes=dataframes,
+        symbols=symbols,
+        price_column=price_column,
+        normalize=normalize,
+        show_volume=show_volume,
+        title=plot_title,
+        save_path=save_path
+    )
+
+    if not save_path:
+        plt.show()
+
+    return dataframes
+
+@register
+def buy_recipe(capital: int, percent: float, distribution: dict):
+    """Given a set of parameters, compute the buying recipe"""
+    buy_amount = capital * percent
+    for symbol, symbol_perc in distribution.items():
+        print(f"{symbol}: buy {buy_amount * symbol_perc}")
 
 
 def parse_date(date_str: str) -> str:
