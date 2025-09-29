@@ -506,3 +506,391 @@ class AshareApiSource(ApiSource):
                     wait_seconds = 0
 
             print("✓ [Sina] Quota reset - resuming crawling")
+
+
+class BureauOfLaborStatisticsAPI(ApiSource):
+    """Bureau of Labor Statistics API data source for economic indicators like CPI and unemployment."""
+
+    def __init__(self, quota_limit: Optional[int] = None, **config):
+        """
+        Initialize Bureau of Labor Statistics data source.
+
+        Args:
+            quota_limit (int, optional): Hourly quota limit for BLS API
+            **config: Additional configuration options
+        """
+        self.base_url = config.get('base_url', 'https://api.bls.gov/publicAPI/v2/timeseries/data/')
+        self.quota_limit = quota_limit
+
+        # Initialize quota manager if quota limit is specified
+        if quota_limit is not None:
+            quota_file = config.get('quota_file', "data/.bls_quota.json")
+            self.quota_manager = QuotaManager(quota_file=quota_file)
+        else:
+            self.quota_manager = None
+
+        # Define available datasets with BLS series IDs
+        self.datasets = {
+            'cpi_inflation': {
+                'series_id': 'CUUR0000SA0',  # CPI-U: All items in U.S. city average, seasonally adjusted
+                'description': 'Consumer Price Index (CPI) - Inflation Data',
+                'value_field': 'cpi_value'
+            },
+            'unemployment_rate': {
+                'series_id': 'LNS14000000',  # Unemployment rate: 16 years and over, seasonally adjusted
+                'description': 'Unemployment Rate',
+                'value_field': 'unemployment_rate'
+            }
+        }
+
+    def validate_symbol(self, symbol: str) -> bool:
+        """
+        Validate symbol (dataset name) for BLS data.
+
+        Args:
+            symbol (str): Dataset name (e.g., 'cpi_inflation', 'unemployment_rate')
+
+        Returns:
+            bool: True if valid dataset name
+        """
+        return symbol.lower() in self.datasets
+
+    def fetch_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Fetch economic data from Bureau of Labor Statistics API.
+
+        Args:
+            symbol (str): Dataset name (e.g., 'cpi_inflation', 'unemployment_rate')
+            start_date (str): Start date in 'YYYY-MM-DD' format
+            end_date (str): End date in 'YYYY-MM-DD' format
+
+        Returns:
+            pd.DataFrame: Economic data with standardized columns
+        """
+        if not self.validate_symbol(symbol):
+            available = ', '.join(self.datasets.keys())
+            raise ValueError(f"Invalid dataset: {symbol}. Available datasets: {available}")
+
+        # Check quota before making request
+        self.wait_for_quota_if_needed()
+
+        dataset = self.datasets[symbol.lower()]
+
+        try:
+            # Convert dates to years for BLS API
+            start_year = pd.to_datetime(start_date).year
+            end_year = pd.to_datetime(end_date).year
+
+            print(f"📡 [BLS] Fetching {dataset['description']} from {start_year} to {end_year}...")
+
+            # Prepare API request
+            payload = {
+                "seriesid": [dataset['series_id']],
+                "startyear": str(start_year),
+                "endyear": str(end_year),
+                "registrationkey": ""  # Public API, no key needed
+            }
+
+            response = requests.post(self.base_url, json=payload, timeout=30)
+
+            # Record the API request for quota tracking
+            if self.quota_manager:
+                self.quota_manager.record_request()
+
+            response.raise_for_status()
+            data = response.json()
+
+            if data['status'] != 'REQUEST_SUCCEEDED':
+                raise ValueError(f"BLS API request failed: {data.get('message', 'Unknown error')}")
+
+            # Extract time series data
+            series_data = data['Results']['series'][0]['data']
+
+            # Convert to DataFrame
+            records = []
+            for item in series_data:
+                # BLS returns data in format: year, period (M01-M12), value
+                year = int(item['year'])
+                period = item['period']
+                value = float(item['value'])
+
+                # Convert period to month (M01 = January, etc.)
+                if period.startswith('M'):
+                    month = int(period[1:])
+                    # Create date as first day of the month
+                    date_str = f"{year}-{month:02d}-01"
+                    records.append({
+                        'date': pd.to_datetime(date_str),
+                        dataset['value_field']: value
+                    })
+
+            df = pd.DataFrame(records)
+            df.set_index('date', inplace=True)
+            df = df.sort_index()
+
+            # Filter by actual date range
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            df = df[(df.index >= start_dt) & (df.index <= end_dt)]
+
+            # Standardize columns for compatibility with stock data format
+            value_col = dataset['value_field']
+            df['Close'] = df[value_col]
+            df['Open'] = df[value_col]
+            df['High'] = df[value_col]
+            df['Low'] = df[value_col]
+            df['Volume'] = 0
+
+            print(f"✓ [BLS] Successfully fetched {len(df)} records")
+            return df
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"BLS API request failed: {e}")
+        except Exception as e:
+            raise Exception(f"Error fetching BLS data: {e}")
+
+    def get_available_datasets(self) -> dict:
+        """
+        Get information about available datasets.
+
+        Returns:
+            dict: Dictionary with dataset names and descriptions
+        """
+        return {name: info['description'] for name, info in self.datasets.items()}
+
+    def can_make_request(self) -> bool:
+        """Check if we can make another API request within quota."""
+        if self.quota_manager and self.quota_limit:
+            return self.quota_manager.can_make_request(self.quota_limit)
+        return True  # No quota limit set
+
+    def get_quota_status(self) -> Optional[dict]:
+        """Get current quota status information."""
+        if self.quota_manager and self.quota_limit:
+            return self.quota_manager.get_quota_status(self.quota_limit)
+        return None
+
+    def wait_for_quota_if_needed(self) -> None:
+        """Wait until quota allows for the next request."""
+        if not self.can_make_request():
+            import time
+            status = self.get_quota_status()
+            wait_seconds = status['seconds_until_reset']
+
+            print(f"⏳ [BLS] Quota limit reached ({status['requests_made']}/{self.quota_limit} requests this hour)")
+            print(f"⏰ [BLS] Waiting {wait_seconds} seconds until next hour...")
+
+            # Wait with progress updates every 60 seconds
+            while wait_seconds > 0:
+                if wait_seconds >= 60:
+                    print(f"⏰ [BLS] {wait_seconds} seconds remaining until quota reset...")
+                    time.sleep(60)
+                    wait_seconds -= 60
+                else:
+                    time.sleep(wait_seconds)
+                    wait_seconds = 0
+
+            print("✓ [BLS] Quota reset - resuming crawling")
+
+
+class FederalFinanceAPI(ApiSource):
+    """Federal Finance API data source for macro-economic data from fiscaldata.treasury.gov."""
+
+    def __init__(self, quota_limit: Optional[int] = None, **config):
+        """
+        Initialize Federal Finance data source.
+
+        Args:
+            quota_limit (int, optional): Hourly quota limit for Treasury API
+            **config: Additional configuration options
+        """
+        self.base_url = config.get('base_url', 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service')
+        self.quota_limit = quota_limit
+
+        # Initialize quota manager if quota limit is specified
+        if quota_limit is not None:
+            quota_file = config.get('quota_file', "data/.federal_finance_quota.json")
+            self.quota_manager = QuotaManager(quota_file=quota_file)
+        else:
+            self.quota_manager = None
+
+        # Define available datasets
+        self.datasets = {
+            'treasury_rates': {
+                'endpoint': 'v2/accounting/od/avg_interest_rates',
+                'description': 'Average Interest Rates on U.S. Treasury Securities',
+                'date_field': 'record_date',
+                'value_fields': ['avg_interest_rate_amt']
+            },
+            'exchange_rates': {
+                'endpoint': 'v1/accounting/od/rates_of_exchange',
+                'description': 'Treasury Reporting Rates of Exchange',
+                'date_field': 'record_date',
+                'value_fields': ['exchange_rate']
+            }
+        }
+
+    def validate_symbol(self, symbol: str) -> bool:
+        """
+        Validate symbol (dataset name) for Federal Finance data.
+
+        Args:
+            symbol (str): Dataset name (e.g., 'treasury_rates', 'tips_cpi', 'i_bonds')
+
+        Returns:
+            bool: True if valid dataset name
+        """
+        return symbol.lower() in self.datasets
+
+    def fetch_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Fetch federal finance data from Treasury API.
+
+        Args:
+            symbol (str): Dataset name (e.g., 'treasury_rates', 'tips_cpi', 'i_bonds')
+            start_date (str): Start date in 'YYYY-MM-DD' format
+            end_date (str): End date in 'YYYY-MM-DD' format
+
+        Returns:
+            pd.DataFrame: Federal finance data with standardized columns
+        """
+        if not self.validate_symbol(symbol):
+            available = ', '.join(self.datasets.keys())
+            raise ValueError(f"Invalid dataset: {symbol}. Available datasets: {available}")
+
+        # Check quota before making request
+        self.wait_for_quota_if_needed()
+
+        dataset = self.datasets[symbol.lower()]
+        url = f"{self.base_url}/{dataset['endpoint']}"
+
+        # Build parameters for the API request
+        params = {
+            'format': 'json',
+            'filter': f"{dataset['date_field']}:gte:{start_date},{dataset['date_field']}:lte:{end_date}",
+            'sort': f"-{dataset['date_field']}",
+            'page[size]': '10000'  # Get max records
+        }
+
+        try:
+            print(f"📡 [Treasury] Fetching {dataset['description']} from {start_date} to {end_date}...")
+
+            response = requests.get(url, params=params, timeout=30)
+
+            # Record the API request for quota tracking
+            if self.quota_manager:
+                self.quota_manager.record_request()
+
+            response.raise_for_status()
+            data = response.json()
+
+            if 'data' not in data or not data['data']:
+                raise ValueError(f"No data returned for dataset {symbol}")
+
+            # Create DataFrame from API response
+            df = pd.DataFrame(data['data'])
+
+            # Convert date column to datetime and set as index
+            date_field = dataset['date_field']
+            df[date_field] = pd.to_datetime(df[date_field])
+            df.set_index(date_field, inplace=True)
+            df.index.name = 'date'
+
+            # Convert value fields to numeric
+            for field in dataset['value_fields']:
+                if field in df.columns:
+                    df[field] = pd.to_numeric(df[field], errors='coerce')
+
+            # Sort by date ascending
+            df = df.sort_index()
+
+            # Rename columns to standardized format for compatibility
+            df = self._standardize_columns(df, symbol.lower())
+
+            print(f"✓ [Treasury] Successfully fetched {len(df)} records")
+            return df
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Treasury API request failed: {e}")
+        except Exception as e:
+            raise Exception(f"Error fetching Treasury data: {e}")
+
+    def _standardize_columns(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        """
+        Standardize column names to be compatible with stock data format.
+
+        Args:
+            df (pd.DataFrame): Raw data from API
+            dataset_name (str): Name of the dataset
+
+        Returns:
+            pd.DataFrame: DataFrame with standardized columns
+        """
+        # Create a copy to avoid modifying original
+        df_std = df.copy()
+
+        # For treasury data, we'll map the main value to 'Close' for compatibility
+        # This allows the data to be used with existing plotting and analysis tools
+
+        if dataset_name == 'treasury_rates':
+            if 'avg_interest_rate_amt' in df_std.columns:
+                df_std['Close'] = df_std['avg_interest_rate_amt']
+                df_std['Open'] = df_std['avg_interest_rate_amt']  # Same value for OHLC
+                df_std['High'] = df_std['avg_interest_rate_amt']
+                df_std['Low'] = df_std['avg_interest_rate_amt']
+
+        elif dataset_name == 'exchange_rates':
+            if 'exchange_rate' in df_std.columns:
+                df_std['Close'] = df_std['exchange_rate']
+                df_std['Open'] = df_std['exchange_rate']
+                df_std['High'] = df_std['exchange_rate']
+                df_std['Low'] = df_std['exchange_rate']
+
+        # Add standard columns that might be expected
+        if 'Volume' not in df_std.columns:
+            df_std['Volume'] = 0  # No volume concept for macro data
+
+        return df_std
+
+    def get_available_datasets(self) -> dict:
+        """
+        Get information about available datasets.
+
+        Returns:
+            dict: Dictionary with dataset names and descriptions
+        """
+        return {name: info['description'] for name, info in self.datasets.items()}
+
+    def can_make_request(self) -> bool:
+        """Check if we can make another API request within quota."""
+        if self.quota_manager and self.quota_limit:
+            return self.quota_manager.can_make_request(self.quota_limit)
+        return True  # No quota limit set
+
+    def get_quota_status(self) -> Optional[dict]:
+        """Get current quota status information."""
+        if self.quota_manager and self.quota_limit:
+            return self.quota_manager.get_quota_status(self.quota_limit)
+        return None
+
+    def wait_for_quota_if_needed(self) -> None:
+        """Wait until quota allows for the next request."""
+        if not self.can_make_request():
+            import time
+            status = self.get_quota_status()
+            wait_seconds = status['seconds_until_reset']
+
+            print(f"⏳ [Treasury] Quota limit reached ({status['requests_made']}/{self.quota_limit} requests this hour)")
+            print(f"⏰ [Treasury] Waiting {wait_seconds} seconds until next hour...")
+
+            # Wait with progress updates every 60 seconds
+            while wait_seconds > 0:
+                if wait_seconds >= 60:
+                    print(f"⏰ [Treasury] {wait_seconds} seconds remaining until quota reset...")
+                    time.sleep(60)
+                    wait_seconds -= 60
+                else:
+                    time.sleep(wait_seconds)
+                    wait_seconds = 0
+
+            print("✓ [Treasury] Quota reset - resuming crawling")

@@ -54,9 +54,6 @@ def plot_prices(symbols: List[str], start_date: str, end_date: str,
         save_path=save_path
     )
 
-    if not save_path:
-        plt.show()
-
     return dataframes
 
 
@@ -84,9 +81,6 @@ def plot_prices_simple(dataframes: List[DataFrame], symbols: List[str], start_da
         title=plot_title,
         save_path=save_path
     )
-
-    if not save_path:
-        plt.show()
 
     return dataframes
 
@@ -134,9 +128,6 @@ def plot_prices_projected(symbols: List[str], weights: List[float], start_date: 
         title=plot_title,
         save_path=save_path
     )
-
-    if not save_path:
-        plt.show()
 
     return dataframes
 
