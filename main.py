@@ -33,8 +33,8 @@ class StockConfig:
 
 
 @register
-def plot_prices(configs: List[StockConfig], start_date: str, end_date: str,
-                         projected: List[StockConfig] = [],
+def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
+                         projected_stocks: List[StockConfig] = [],
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
@@ -44,7 +44,7 @@ def plot_prices(configs: List[StockConfig], start_date: str, end_date: str,
     backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
 
     # Fetch data for stocks
-    for config in configs:
+    for config in stocks:
         symbol = config.symbol
         if config.data is None:
             if symbol.lower() == 'cpi_inflation':
@@ -59,11 +59,11 @@ def plot_prices(configs: List[StockConfig], start_date: str, end_date: str,
             config.data = backend.normalize_data(config.data)
 
     # Fetch data for projected stocks
-    for config in projected:
+    for config in projected_stocks:
         symbol = config.symbol
         if config.data is None:
             if symbol.lower() in ('cpi_inflation', 'tbill_rates', 'unemployment_rate'):
-                raise ValueError("projected signals only support stock atm")
+                raise ValueError("projected_stocks signals only support stock atm")
             aggregated_data = None
             for source, weight in config.weights.items():
                 source_data = backend.get_daily_price(source, start_date, end_date)
@@ -90,7 +90,7 @@ def plot_prices(configs: List[StockConfig], start_date: str, end_date: str,
             else:
                 config.data = aggregated_data
 
-    all_configs = configs + projected
+    all_configs = stocks + projected_stocks
     dataframes = [config.data for config in all_configs]
     symbols = [config.symbol for config in all_configs]
 
