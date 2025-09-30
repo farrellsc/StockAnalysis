@@ -32,9 +32,17 @@ class StockConfig:
     weights: Optional[Dict[str, float]] = None
 
 
+@dataclass
+class MacroConfig:
+    interest_rate: bool = False
+    cpi: bool = False
+    unemployment_rate: bool = False
+
+
 @register
 def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
                          projected_stocks: List[StockConfig] = [],
+                         environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
@@ -97,13 +105,34 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     # Create comparison plot
     plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
 
+    secondary_symbols = []
+    secondary_dataframes = []
+    secondary_ylabel = None
+    if environments.interest_rate:
+        secondary_symbols.append("interest_rate")
+        secondary_dataframes.append(backend.get_interest_rate(start_date, end_date))
+        secondary_ylabel = "percent"
+    if environments.cpi:
+        secondary_symbols.append("cpi")
+        secondary_dataframes.append(backend.get_yoy_cpi_inflation(start_date, end_date))
+        secondary_ylabel = "percent"
+    if environments.unemployment_rate:
+        secondary_symbols.append("unemployment_rate")
+        secondary_dataframes.append(backend.get_unemployment_rate(start_date, end_date))
+        secondary_ylabel = "percent"
+
+
     fig = frontend.plot_price_comparison(
         dataframes=dataframes,
         symbols=symbols,
+        ylabel="Price",
         price_column=price_column,
         show_volume=show_volume,
         title=plot_title,
-        save_path=save_path
+        save_path=save_path,
+        secondary_dataframes=secondary_dataframes,
+        secondary_symbols=secondary_symbols,
+        secondary_ylabel=secondary_ylabel,
     )
 
     return dataframes

@@ -61,13 +61,18 @@ class Frontend:
                               dataframes: List[pd.DataFrame],
                               symbols: List[str],
                               price_column: str = 'Close',
+                              ylabel: str = None,
                               show_volume: bool = True,
                               title: str = None,
                               save_path: str = None,
                               figsize: Tuple[int, int] = None,
                               fig: plt.Figure = None,
                               ax_price: plt.Axes = None,
-                              ax_volume: plt.Axes = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]:
+                              ax_volume: plt.Axes = None,
+                              secondary_dataframes: List[pd.DataFrame] = None,
+                              secondary_symbols: List[str] = None,
+                              secondary_price_column: str = 'Close',
+                              secondary_ylabel: str = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes], Optional[plt.Axes]]:
         """
         Plot multiple stocks on the same graph for comparison.
 
@@ -82,9 +87,14 @@ class Frontend:
             fig (plt.Figure, optional): Existing figure to add to
             ax_price (plt.Axes, optional): Existing price axes to add to
             ax_volume (plt.Axes, optional): Existing volume axes to add to
+            ylabel (str, optional): Custom label for left y-axis
+            secondary_dataframes (List[pd.DataFrame], optional): Second set of dataframes for right y-axis
+            secondary_symbols (List[str], optional): List of symbols for secondary data
+            secondary_price_column (str): Column to plot for secondary data
+            secondary_ylabel (str, optional): Label for right y-axis
 
         Returns:
-            Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]: Figure and axes objects (fig, ax_price, ax_volume)
+            Tuple[plt.Figure, plt.Axes, Optional[plt.Axes], Optional[plt.Axes]]: Figure and axes objects (fig, ax_price, ax_volume, ax_secondary)
 
         Raises:
             ValueError: If dataframes and symbols lists don't match or are empty
@@ -100,6 +110,16 @@ class Frontend:
         if price_column not in dataframes[0].columns:
             available_cols = list(dataframes[0].columns)
             raise ValueError(f"Column '{price_column}' not found. Available columns: {available_cols}")
+
+        # Validate secondary data if provided
+        if secondary_dataframes is not None:
+            if secondary_symbols is None:
+                raise ValueError("secondary_symbols must be provided when secondary_dataframes is given")
+            if len(secondary_dataframes) != len(secondary_symbols):
+                raise ValueError("Number of secondary dataframes must match number of secondary symbols")
+            if secondary_price_column not in secondary_dataframes[0].columns:
+                available_cols = list(secondary_dataframes[0].columns)
+                raise ValueError(f"Secondary column '{secondary_price_column}' not found. Available columns: {available_cols}")
 
         # Use existing figure/axes or create new ones
         if fig is None or ax_price is None:
@@ -157,9 +177,54 @@ class Frontend:
                                   alpha=0.6, color=self.colors[color_idx],
                                   label=f"{symbol}", width=1)
 
+        # Plot secondary data on right y-axis if provided
+        ax_secondary = None
+        if secondary_dataframes is not None and secondary_symbols is not None:
+            # Create secondary y-axis
+            ax_secondary = ax_price.twinx()
+
+            # Track secondary data for statistics
+            secondary_data = {}
+
+            # Plot each secondary stock
+            for i, (df, symbol) in enumerate(zip(secondary_dataframes, secondary_symbols)):
+                if df.empty:
+                    print(f"⚠️  Skipping secondary {symbol}: No data available")
+                    continue
+
+                # Get secondary price data
+                price_data = df[secondary_price_column].dropna()
+
+                if price_data.empty:
+                    print(f"⚠️  Skipping secondary {symbol}: No valid price data")
+                    continue
+
+                # Use different line style for secondary data
+                color_idx = (existing_lines + len(symbols) + i) % len(self.colors)
+                ax_secondary.plot(price_data.index, price_data,
+                              label=f"{symbol} (R)", linewidth=2,
+                              linestyle='--', color=self.colors[color_idx])
+                secondary_data[symbol] = price_data
+                all_data[f"{symbol} (R)"] = price_data
+
+            # Configure secondary y-axis
+            if secondary_ylabel:
+                ax_secondary.set_ylabel(secondary_ylabel, fontsize=12, fontweight='bold')
+            else:
+                ax_secondary.set_ylabel(f'{secondary_price_column} (Secondary)', fontsize=12, fontweight='bold')
+
+            # Add secondary legend
+            ax_secondary.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+
+        # Create combined symbols list for statistics and hover functionality
+        all_symbols = symbols.copy()
+        if secondary_symbols:
+            all_symbols.extend([f"{s} (R)" for s in secondary_symbols])
+
         # Configure price subplot (only set labels/title if this is a new plot)
         if existing_lines == 0:
-            ax_price.set_ylabel(f'{price_column}', fontsize=12, fontweight='bold')
+            y_label = ylabel if ylabel is not None else price_column
+            ax_price.set_ylabel(y_label, fontsize=12, fontweight='bold')
             plot_title = title or f"Price Comparison ({price_column})"
 
             ax_price.set_title(plot_title, fontsize=16, fontweight='bold', pad=20)
@@ -206,12 +271,25 @@ class Frontend:
         if existing_lines == 0:
             plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
+        # Add 20% margin on top and bottom of y-axis
+        y_min, y_max = ax_price.get_ylim()
+        y_range = y_max - y_min
+        margin = y_range * 0.20
+        ax_price.set_ylim(y_min - margin, y_max + margin)
+
+        # Also adjust secondary axis if it exists
+        if ax_secondary is not None:
+            y_min_sec, y_max_sec = ax_secondary.get_ylim()
+            y_range_sec = y_max_sec - y_min_sec
+            margin_sec = y_range_sec * 0.20
+            ax_secondary.set_ylim(y_min_sec - margin_sec, y_max_sec + margin_sec)
+
         # Adjust layout (only on first call)
         if existing_lines == 0:
             plt.tight_layout()
 
         # Add statistics text box after layout is finalized
-        self._add_statistics_box(ax_price, all_data, symbols)
+        self._add_statistics_box(ax_price, all_data, all_symbols)
 
         # Save plot if path provided
         if save_path:
@@ -220,16 +298,25 @@ class Frontend:
             print(f"✓ Plot saved to: {save_path}")
 
         # Add interactive hover functionality
-        self._add_hover_functionality(ax_price, all_data, symbols)
+        self._add_hover_functionality(ax_price, all_data, all_symbols)
+
+        # Add hover functionality for secondary axis if it exists
+        if ax_secondary is not None:
+            self._add_hover_functionality(ax_secondary, all_data, all_symbols)
 
         # Print summary statistics
-        self._print_summary_stats(all_data, symbols)
+        self._print_summary_stats(all_data, all_symbols)
 
-        print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
+        total_symbols = len(symbols)
+        if secondary_symbols:
+            total_symbols += len(secondary_symbols)
+            print(f"✓ Successfully created comparison chart for {len(symbols)} primary and {len(secondary_symbols)} secondary symbols")
+        else:
+            print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
         print("💡 Hover over the lines to see detailed information")
         print("💡 Use plt.show() to display the plot when ready")
 
-        return fig, ax_price, ax_volume
+        return fig, ax_price, ax_volume, ax_secondary
 
     def show_plot(self, fig: plt.Figure = None):
         """
