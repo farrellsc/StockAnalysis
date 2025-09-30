@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import pickle
 import os
 from datetime import datetime
@@ -600,3 +601,183 @@ class Database:
         price_cols = [col for col in df.columns if col not in metadata_cols]
 
         return df[price_cols] if price_cols else None
+
+    def backfill_sparse_prices(self, symbol: str, columns: Optional[List[str]] = None, freq: str = 'D') -> None:
+        """
+        Backfill sparse datetime and price data for a symbol by creating a complete date range
+        and forward-filling with the latest previous values.
+        Updates the loaded data in the Database.
+
+        Args:
+            symbol (str): Stock symbol to backfill
+            columns (List[str], optional): Specific columns to backfill. If None, backfills all price columns.
+            freq (str): Frequency for date range ('D' for daily, 'B' for business days). Default is 'D'.
+
+        Example:
+            Given sparse dates [2023-01-01, 2023-01-05, 2023-01-10] with values [a, b, c],
+            becomes complete daily range with forward-filled values:
+            [2023-01-01: a, 2023-01-02: a, 2023-01-03: a, 2023-01-04: a, 2023-01-05: b, ...]
+
+        Usage:
+            >>> database.backfill_sparse_prices('AAPL')  # Daily frequency
+            >>> database.backfill_sparse_prices('AAPL', freq='B')  # Business days only
+        """
+        symbol_data = self.query(symbol=symbol)
+
+        if symbol_data is None or len(symbol_data) == 0:
+            print(f"No data found for symbol {symbol}")
+            return
+
+        # Determine which columns to backfill
+        if columns is None:
+            # Default to all numeric columns that typically contain price data
+            price_columns = ['Open', 'High', 'Low', 'Close', 'Adj_Open', 'Adj_High', 'Adj_Low', 'Adj_Close']
+            columns = [col for col in price_columns if col in symbol_data.columns]
+
+            # If no standard price columns found, use all numeric columns
+            if not columns:
+                columns = symbol_data.select_dtypes(include=[np.number]).columns.tolist()
+
+        available_columns = [col for col in columns if col in symbol_data.columns]
+
+        if not available_columns:
+            print(f"No columns to backfill for {symbol}")
+            return
+
+        # Create complete date range
+        start_date = symbol_data.index.min()
+        end_date = symbol_data.index.max()
+
+        print(f"Creating complete date range for {symbol} from {start_date.date()} to {end_date.date()} (freq: {freq})")
+
+        if freq == 'B':
+            # Business days only (excludes weekends)
+            complete_dates = pd.bdate_range(start=start_date, end=end_date, freq='D')
+        else:
+            # All days
+            complete_dates = pd.date_range(start=start_date, end=end_date, freq=freq)
+
+        # Create DataFrame with complete date range
+        filled_data = symbol_data.reindex(complete_dates)
+
+        print(f"Backfilling {symbol} on columns: {available_columns}")
+        print(f"Original data points: {len(symbol_data)}, Complete range: {len(filled_data)}")
+
+        # Forward fill the specified columns
+        for col in available_columns:
+            if col in filled_data.columns:
+                filled_data[col] = filled_data[col].fillna(method='ffill')
+
+        # Forward fill metadata columns if they exist
+        metadata_columns = ['symbol', 'source', 'last_updated']
+        for col in metadata_columns:
+            if col in filled_data.columns:
+                filled_data[col] = filled_data[col].fillna(method='ffill')
+
+        # Report statistics
+        original_count = len(symbol_data)
+        filled_count = len(filled_data)
+        new_dates_added = filled_count - original_count
+
+        print(f"✓ Added {new_dates_added} missing dates")
+
+        # Check for remaining nulls in price columns
+        remaining_nulls = filled_data[available_columns].isnull().sum().sum()
+        if remaining_nulls > 0:
+            print(f"⚠️  {remaining_nulls} null values remain in price columns (no previous value to fill from)")
+
+        # Update the internal DataFrame
+        symbol_mask = self._df['symbol'] == symbol.upper()
+
+        # Remove old data for this symbol
+        self._df = self._df[~symbol_mask]
+
+        # Add backfilled data
+        self._df = pd.concat([self._df, filled_data])
+        self._df = self._df.sort_index()
+
+        # Save to file
+        self.save_dataframe(self._df)
+
+        print(f"✓ Backfilled sparse dates and prices saved for {symbol}")
+
+    def delete_by_query(self, symbol: str = None, source: str = None, start_date: str = None, end_date: str = None) -> int:
+        """
+        Delete records from the database based on query parameters.
+
+        Args:
+            symbol (str, optional): Stock symbol to delete
+            source (str, optional): Data source to delete
+            start_date (str, optional): Start date in 'YYYY-MM-DD' format
+            end_date (str, optional): End date in 'YYYY-MM-DD' format
+
+        Returns:
+            int: Number of records deleted
+
+        Example:
+            >>> # Delete all data for a specific symbol
+            >>> database.delete_by_query(symbol='AAPL')
+
+            >>> # Delete data for a symbol within a date range
+            >>> database.delete_by_query(symbol='AAPL', start_date='2020-01-01', end_date='2020-12-31')
+
+            >>> # Delete all data from a specific source
+            >>> database.delete_by_query(source='cpi_inflation')
+        """
+        if self._df is None:
+            self._load_data()
+
+        if self._df is None or len(self._df) == 0:
+            print("No data in database to delete")
+            return 0
+
+        # Start with all data
+        mask = pd.Series([True] * len(self._df), index=self._df.index)
+
+        # Apply symbol filter
+        if symbol is not None:
+            symbol_mask = self._df['symbol'] == symbol.upper()
+            mask = mask & symbol_mask
+            print(f"Filtering by symbol: {symbol.upper()}")
+
+        # Apply source filter
+        if source is not None:
+            if 'source' in self._df.columns:
+                source_mask = self._df['source'] == source
+                mask = mask & source_mask
+                print(f"Filtering by source: {source}")
+            else:
+                print("Warning: 'source' column not found in database")
+
+        # Apply date range filter
+        if start_date is not None or end_date is not None:
+            if start_date is not None:
+                start_dt = pd.to_datetime(start_date)
+                date_mask = self._df.index >= start_dt
+                mask = mask & date_mask
+                print(f"Filtering from date: {start_date}")
+
+            if end_date is not None:
+                end_dt = pd.to_datetime(end_date)
+                date_mask = self._df.index <= end_dt
+                mask = mask & date_mask
+                print(f"Filtering to date: {end_date}")
+
+        # Count records to be deleted
+        records_to_delete = mask.sum()
+
+        if records_to_delete == 0:
+            print("No records match the deletion criteria")
+            return 0
+
+        # Show what will be deleted
+        print(f"Found {records_to_delete} records matching deletion criteria")
+
+        # Delete the records (keep everything that doesn't match the mask)
+        self._df = self._df[~mask]
+
+        # Save the updated data
+        self.save_dataframe(self._df)
+
+        print(f"✓ Deleted {records_to_delete} records from database")
+        return records_to_delete

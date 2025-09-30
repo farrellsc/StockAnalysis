@@ -633,16 +633,34 @@ class BureauOfLaborStatisticsAPI(ApiSource):
             end_dt = pd.to_datetime(end_date)
             df = df[(df.index >= start_dt) & (df.index <= end_dt)]
 
-            # Standardize columns for compatibility with stock data format
+            # Create new DataFrame with only standardized columns matching AshareApiSource schema
             value_col = dataset['value_field']
-            df['Close'] = df[value_col]
-            df['Open'] = df[value_col]
-            df['High'] = df[value_col]
-            df['Low'] = df[value_col]
-            df['Volume'] = 0
+            if value_col in df.columns:
+                value_data = df[value_col]
 
-            print(f"✓ [BLS] Successfully fetched {len(df)} records")
-            return df
+                # Create new DataFrame with only standardized columns
+                df_std = pd.DataFrame(index=df.index)
+
+                # Map economic data to OHLCV columns (same value for all since it's a rate/index)
+                df_std['Open'] = value_data
+                df_std['High'] = value_data
+                df_std['Low'] = value_data
+                df_std['Close'] = value_data
+                df_std['Volume'] = 0  # No volume for economic indicators
+
+                # Add adjusted columns with same values (required by AshareApiSource schema)
+                df_std['Adj_Open'] = value_data
+                df_std['Adj_High'] = value_data
+                df_std['Adj_Low'] = value_data
+                df_std['Adj_Close'] = value_data
+                df_std['Adj_Volume'] = 0
+                df_std['Dividend'] = 0.0
+                df_std['Split_Factor'] = 1.0
+
+                print(f"✓ [BLS] Successfully fetched {len(df_std)} records")
+                return df_std
+            else:
+                raise ValueError(f"Expected column {value_col} not found in BLS data")
 
         except requests.exceptions.RequestException as e:
             raise Exception(f"BLS API request failed: {e}")
@@ -694,11 +712,11 @@ class BureauOfLaborStatisticsAPI(ApiSource):
 
 
 class FederalFinanceAPI(ApiSource):
-    """Federal Finance API data source for macro-economic data from fiscaldata.treasury.gov."""
+    """Federal Finance API data source for T-Bill rates from fiscaldata.treasury.gov, using stock-like data schema."""
 
     def __init__(self, quota_limit: Optional[int] = None, **config):
         """
-        Initialize Federal Finance data source.
+        Initialize Federal Finance data source for T-Bill rates.
 
         Args:
             quota_limit (int, optional): Hourly quota limit for Treasury API
@@ -714,19 +732,13 @@ class FederalFinanceAPI(ApiSource):
         else:
             self.quota_manager = None
 
-        # Define available datasets
+        # Define T-Bill rate dataset
         self.datasets = {
-            'treasury_rates': {
+            'tbill_rates': {
                 'endpoint': 'v2/accounting/od/avg_interest_rates',
-                'description': 'Average Interest Rates on U.S. Treasury Securities',
+                'description': 'Treasury Bill Interest Rates',
                 'date_field': 'record_date',
                 'value_fields': ['avg_interest_rate_amt']
-            },
-            'exchange_rates': {
-                'endpoint': 'v1/accounting/od/rates_of_exchange',
-                'description': 'Treasury Reporting Rates of Exchange',
-                'date_field': 'record_date',
-                'value_fields': ['exchange_rate']
             }
         }
 
@@ -767,9 +779,9 @@ class FederalFinanceAPI(ApiSource):
         # Build parameters for the API request
         params = {
             'format': 'json',
-            'filter': f"{dataset['date_field']}:gte:{start_date},{dataset['date_field']}:lte:{end_date}",
+            'filter': f"{dataset['date_field']}:gte:{start_date},{dataset['date_field']}:lte:{end_date},security_desc:eq:Treasury Bills",
             'sort': f"-{dataset['date_field']}",
-            'page[size]': '10000'  # Get max records
+            'page[size]': '100000'  # Get max records
         }
 
         try:
@@ -804,6 +816,37 @@ class FederalFinanceAPI(ApiSource):
             # Sort by date ascending
             df = df.sort_index()
 
+            # Handle duplicate dates - investigate what's causing them
+            if df.index.duplicated().any():
+                duplicate_count = df.index.duplicated().sum()
+                print(f"⚠️  Found {duplicate_count} duplicate dates, investigating...")
+
+                # Show available columns to understand data structure
+                print(f"Available columns: {list(df.columns)}")
+
+                # Find a sample duplicate date to examine
+                duplicate_dates = df.index[df.index.duplicated(keep=False)]
+                if len(duplicate_dates) > 0:
+                    sample_date = duplicate_dates[0]
+                    sample_rows = df[df.index == sample_date]
+                    print(f"Sample duplicate date {sample_date}:")
+                    print(f"Number of rows: {len(sample_rows)}")
+                    print("Sample rows:")
+                    print(sample_rows.head())
+
+                # Check if duplicates vary by any specific columns
+                print("\nChecking for differences between duplicate rows...")
+                for col in df.columns:
+                    if col != dataset['date_field']:  # Skip the date field itself
+                        duplicate_values = df[df.index.duplicated(keep=False)][col].nunique()
+                        total_duplicates = len(df[df.index.duplicated(keep=False)])
+                        if duplicate_values > 1:
+                            print(f"Column '{col}' has {duplicate_values} different values among {total_duplicates} duplicate rows")
+
+                # For now, just keep the first occurrence of each date
+                df = df.drop_duplicates(keep='first')
+                print(f"✓ Deduplicated to {len(df)} unique dates")
+
             # Rename columns to standardized format for compatibility
             df = self._standardize_columns(df, symbol.lower())
 
@@ -817,40 +860,44 @@ class FederalFinanceAPI(ApiSource):
 
     def _standardize_columns(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
         """
-        Standardize column names to be compatible with stock data format.
+        Standardize column names to match AshareApiSource database schema (OHLCV format).
+        Only preserves standardized columns, drops all other API columns.
 
         Args:
             df (pd.DataFrame): Raw data from API
             dataset_name (str): Name of the dataset
 
         Returns:
-            pd.DataFrame: DataFrame with standardized columns
+            pd.DataFrame: DataFrame with only standardized columns matching stock data format
         """
-        # Create a copy to avoid modifying original
-        df_std = df.copy()
+        # For T-Bill rates, map to OHLCV format like AshareApiSource
+        if dataset_name == 'tbill_rates':
+            if 'avg_interest_rate_amt' in df.columns:
+                rate_value = df['avg_interest_rate_amt']
 
-        # For treasury data, we'll map the main value to 'Close' for compatibility
-        # This allows the data to be used with existing plotting and analysis tools
+                # Create new DataFrame with only standardized columns
+                df_std = pd.DataFrame(index=df.index)
 
-        if dataset_name == 'treasury_rates':
-            if 'avg_interest_rate_amt' in df_std.columns:
-                df_std['Close'] = df_std['avg_interest_rate_amt']
-                df_std['Open'] = df_std['avg_interest_rate_amt']  # Same value for OHLC
-                df_std['High'] = df_std['avg_interest_rate_amt']
-                df_std['Low'] = df_std['avg_interest_rate_amt']
+                # Map interest rate to OHLCV columns (same value for all since it's a rate)
+                df_std['Open'] = rate_value
+                df_std['High'] = rate_value
+                df_std['Low'] = rate_value
+                df_std['Close'] = rate_value
+                df_std['Volume'] = 0  # No volume for interest rates
 
-        elif dataset_name == 'exchange_rates':
-            if 'exchange_rate' in df_std.columns:
-                df_std['Close'] = df_std['exchange_rate']
-                df_std['Open'] = df_std['exchange_rate']
-                df_std['High'] = df_std['exchange_rate']
-                df_std['Low'] = df_std['exchange_rate']
+                # Add adjusted columns with same values (required by AshareApiSource schema)
+                df_std['Adj_Open'] = rate_value
+                df_std['Adj_High'] = rate_value
+                df_std['Adj_Low'] = rate_value
+                df_std['Adj_Close'] = rate_value
+                df_std['Adj_Volume'] = 0
+                df_std['Dividend'] = 0.0
+                df_std['Split_Factor'] = 1.0
 
-        # Add standard columns that might be expected
-        if 'Volume' not in df_std.columns:
-            df_std['Volume'] = 0  # No volume concept for macro data
+                return df_std
 
-        return df_std
+        # If dataset not recognized, return empty DataFrame with same index
+        return pd.DataFrame(index=df.index)
 
     def get_available_datasets(self) -> dict:
         """
