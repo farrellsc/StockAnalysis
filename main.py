@@ -38,7 +38,15 @@ def plot_prices(symbols: List[str], start_date: str, end_date: str,
     dataframes = []
 
     for symbol in symbols:
-        df = backend.get_daily_price(symbol, start_date, end_date)
+        print(symbol.lower())
+        if symbol.lower() == 'cpi_inflation':
+            df = backend.get_yoy_cpi_inflation(start_date, end_date)
+        elif symbol.lower() == 'tbill_rates':
+            df = backend.get_interest_rate(start_date, end_date)
+        elif symbol.lower() == 'unemployment_rate':
+            df = backend.get_unemployment_rate(start_date, end_date)
+        else:
+            df = backend.get_daily_price(symbol, start_date, end_date)
         dataframes.append(df)
 
     # Create comparison plot
@@ -104,7 +112,14 @@ def plot_prices_projected(symbols: List[str], weights: List[float], start_date: 
     dataframes = []
 
     for symbol in symbols:
-        df = backend.get_daily_price(symbol, start_date, end_date, normalize=True)
+        if symbol.lower() == 'cpi_inflation':
+            df = backend.get_yoy_cpi_inflation(symbol, start_date, end_date)
+        elif symbol.lower() == 'tbill_rates':
+            df = backend.get_interest_rate(start_date, end_date)
+        elif symbol.lower() == 'unemployment_rate':
+            df = backend.get_unemployment_rate(start_date, end_date)
+        else:
+            df = backend.get_daily_price(symbol, start_date, end_date, normalize=True)
         dataframes.append(df)
 
     aggregated_price = dataframes[0][price_column] * weights[0]

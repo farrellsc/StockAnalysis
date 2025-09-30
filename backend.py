@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 import os
@@ -265,3 +266,169 @@ class Backend:
 
         except Exception as e:
             raise Exception(f"Failed to get latest data for {symbol.upper()}: {e}")
+
+    def _calculate_cpi_yoy(self, symbol: str = 'cpi_inflation', source: Optional[str] = None) -> pd.DataFrame:
+        """
+        Calculate year-over-year percentage change for CPI inflation data.
+
+        Args:
+            symbol (str): Symbol for CPI data (default: 'cpi_inflation')
+            source (str, optional): Data source to filter by. If None, searches all sources.
+
+        Returns:
+            pd.DataFrame: DataFrame with year-over-year CPI percentage changes
+
+        Raises:
+            ValueError: If no CPI data found or insufficient data for YoY calculation
+        """
+        # Get CPI data from database
+        database = self._get_database()
+        cpi_data = database.query(symbol=symbol, source=source)
+
+        if cpi_data is None or len(cpi_data) == 0:
+            raise ValueError(f"No CPI data found for symbol '{symbol}' with source '{source}'")
+
+        # Sort by date to ensure proper ordering
+        cpi_data = cpi_data.sort_index()
+
+        # Remove duplicate index entries by keeping the last occurrence
+        if cpi_data.index.duplicated().any():
+            print(f"⚠️  Found {cpi_data.index.duplicated().sum()} duplicate dates, keeping last occurrence")
+            cpi_data = cpi_data[~cpi_data.index.duplicated(keep='last')]
+
+        # Check if we have at least 12 months of data for YoY calculation
+        if len(cpi_data) < 12:
+            raise ValueError(f"Insufficient data for year-over-year calculation. Need at least 12 months, got {len(cpi_data)}")
+
+        # Calculate year-over-year percentage change
+        # Use 'Close' column as it contains the CPI value in our standardized schema
+        cpi_values = cpi_data['Close']
+
+        # Optimized approach using pandas native functions
+        # Create a DataFrame with year-ago dates as index for alignment
+        cpi_df_shifted = cpi_data.copy()
+        cpi_df_shifted.index = cpi_df_shifted.index + pd.DateOffset(years=1)
+
+        # Align current data with year-ago data using pandas merge/join
+        # This automatically handles missing dates and alignment
+        current_data = cpi_data[['Close']].rename(columns={'Close': 'current'})
+        year_ago_data = cpi_df_shifted[['Close']].rename(columns={'Close': 'year_ago'})
+
+        # Inner join to get only dates where both current and year-ago data exist
+        aligned_data = current_data.join(year_ago_data, how='inner')
+
+        # Vectorized YoY calculation - much faster than loops
+        yoy_change = ((aligned_data['current'] - aligned_data['year_ago']) / aligned_data['year_ago']) * 100
+
+        # Create result DataFrame with the same structure
+        result = cpi_data.copy()
+
+        # Initialize Close column with NaN, then fill with calculated YoY values
+        result['Close'] = np.nan
+        result.loc[yoy_change.index, 'Close'] = yoy_change
+        result.loc[yoy_change.index, 'Open'] = yoy_change
+        result.loc[yoy_change.index, 'High'] = yoy_change
+        result.loc[yoy_change.index, 'Low'] = yoy_change
+
+        # Remove rows with NaN values (dates without valid YoY calculation)
+        result = result.dropna()
+
+        print(f"✓ Calculated year-over-year CPI changes: {len(result)} data points")
+
+        return result
+
+    def get_yoy_cpi_inflation(self, start_date: str = None, end_date: str = None, source: str = 'bureauoflaborstatisticsapi') -> pd.DataFrame:
+        """
+        Get year-over-year CPI inflation data.
+
+        Args:
+            start_date (str, optional): Start date in 'YYYY-MM-DD' format
+            end_date (str, optional): End date in 'YYYY-MM-DD' format
+            source (str): Data source (default: 'BLS')
+
+        Returns:
+            pd.DataFrame: Year-over-year CPI inflation data
+
+        Raises:
+            ValueError: If no CPI data found or insufficient data for YoY calculation
+        """
+        try:
+            # Calculate YoY CPI inflation
+            yoy_data = self._calculate_cpi_yoy(symbol='cpi_inflation', source=source)
+
+            # Apply date filtering if specified
+            if start_date is not None or end_date is not None:
+                if start_date is not None:
+                    start_dt = pd.to_datetime(start_date)
+                    yoy_data = yoy_data[yoy_data.index >= start_dt]
+
+                if end_date is not None:
+                    end_dt = pd.to_datetime(end_date)
+                    yoy_data = yoy_data[yoy_data.index <= end_dt]
+
+            if len(yoy_data) == 0:
+                raise ValueError("No YoY CPI inflation data found for the specified date range")
+
+            print(f"📈 Retrieved {len(yoy_data)} days of YoY CPI inflation data")
+            return self._format_output_dataframe(yoy_data)
+
+        except Exception as e:
+            raise Exception(f"Failed to get YoY CPI inflation data: {e}")
+
+    def get_unemployment_rate(self, start_date: str = None, end_date: str = None, source: str = 'bureauoflaborstatisticsapi') -> pd.DataFrame:
+        """
+        Get unemployment rate data.
+
+        Args:
+            start_date (str, optional): Start date in 'YYYY-MM-DD' format
+            end_date (str, optional): End date in 'YYYY-MM-DD' format
+            source (str): Data source (default: 'BLS')
+
+        Returns:
+            pd.DataFrame: Unemployment rate data
+
+        Raises:
+            ValueError: If no unemployment data found
+        """
+        try:
+            # Get unemployment rate data from database
+            data = self._get_data_from_database('unemployment_rate', start_date or '1900-01-01',
+                                              end_date or '2099-12-31', source=source)
+
+            if data is None or len(data) == 0:
+                raise ValueError(f"No unemployment rate data found for the specified period")
+
+            print(f"📊 Retrieved {len(data)} days of unemployment rate data")
+            return self._format_output_dataframe(data)
+
+        except Exception as e:
+            raise Exception(f"Failed to get unemployment rate data: {e}")
+
+    def get_interest_rate(self, start_date: str = None, end_date: str = None, source: str = 'federalfinanceapi') -> pd.DataFrame:
+        """
+        Get interest rate data (Treasury Bills).
+
+        Args:
+            start_date (str, optional): Start date in 'YYYY-MM-DD' format
+            end_date (str, optional): End date in 'YYYY-MM-DD' format
+            source (str): Data source (default: 'FederalFinance')
+
+        Returns:
+            pd.DataFrame: Interest rate data
+
+        Raises:
+            ValueError: If no interest rate data found
+        """
+        try:
+            # Get Treasury Bill rates from database
+            data = self._get_data_from_database('tbill_rates', start_date or '1900-01-01',
+                                              end_date or '2099-12-31', source=source)
+
+            if data is None or len(data) == 0:
+                raise ValueError(f"No interest rate data found for the specified period")
+
+            print(f"💰 Retrieved {len(data)} days of interest rate data")
+            return self._format_output_dataframe(data)
+
+        except Exception as e:
+            raise Exception(f"Failed to get interest rate data: {e}")
