@@ -61,7 +61,6 @@ class Frontend:
                               dataframes: List[pd.DataFrame],
                               symbols: List[str],
                               price_column: str = 'Close',
-                              normalize: bool = False,
                               show_volume: bool = True,
                               title: str = None,
                               save_path: str = None,
@@ -76,7 +75,6 @@ class Frontend:
             dataframes (List[pd.DataFrame]): List of dataframes from Backend.get_daily_price()
             symbols (List[str]): List of stock symbols corresponding to dataframes
             price_column (str): Column to plot ('Close', 'Open', 'High', 'Low', 'Adj Close')
-            normalize (bool): If True, normalize prices to percentage change from first day
             show_volume (bool): If True, show volume subplot
             title (str, optional): Custom title for the plot
             save_path (str, optional): Path to save the plot
@@ -97,6 +95,7 @@ class Frontend:
 
         if len(dataframes) != len(symbols):
             raise ValueError("Number of dataframes must match number of symbols")
+
 
         if price_column not in dataframes[0].columns:
             available_cols = list(dataframes[0].columns)
@@ -145,17 +144,10 @@ class Frontend:
             # Calculate color index for this line
             color_idx = (existing_lines + i) % len(self.colors)
 
-            # Normalize prices if requested
-            if normalize:
-                # Convert to percentage change from first day
-                normalized_data = (price_data / price_data.iloc[0] - 1) * 100
-                ax_price.plot(price_data.index, normalized_data,
-                              label=f"{symbol}", linewidth=2, color=self.colors[color_idx])
-                all_data[symbol] = normalized_data
-            else:
-                ax_price.plot(price_data.index, price_data,
-                              label=f"{symbol}", linewidth=2, color=self.colors[color_idx])
-                all_data[symbol] = price_data
+            # Plot price data
+            ax_price.plot(price_data.index, price_data,
+                          label=f"{symbol}", linewidth=2, color=self.colors[color_idx])
+            all_data[symbol] = price_data
 
             # Plot volume if requested
             if show_volume and ax_volume is not None and 'Volume' in df.columns:
@@ -167,13 +159,8 @@ class Frontend:
 
         # Configure price subplot (only set labels/title if this is a new plot)
         if existing_lines == 0:
-            if normalize:
-                ax_price.set_ylabel('Percentage Change (%)', fontsize=12, fontweight='bold')
-                ax_price.axhline(y=0, color='black', linestyle='--', alpha=0.3)
-                plot_title = title or f"Normalized Price Comparison ({price_column})"
-            else:
-                ax_price.set_ylabel(f'{price_column} Price ($)', fontsize=12, fontweight='bold')
-                plot_title = title or f"Price Comparison ({price_column})"
+            ax_price.set_ylabel(f'{price_column}', fontsize=12, fontweight='bold')
+            plot_title = title or f"Price Comparison ({price_column})"
 
             ax_price.set_title(plot_title, fontsize=16, fontweight='bold', pad=20)
             ax_price.grid(True, alpha=0.3)
@@ -224,7 +211,7 @@ class Frontend:
             plt.tight_layout()
 
         # Add statistics text box after layout is finalized
-        self._add_statistics_box(ax_price, all_data, symbols, normalize)
+        self._add_statistics_box(ax_price, all_data, symbols)
 
         # Save plot if path provided
         if save_path:
@@ -233,10 +220,10 @@ class Frontend:
             print(f"✓ Plot saved to: {save_path}")
 
         # Add interactive hover functionality
-        self._add_hover_functionality(ax_price, all_data, symbols, normalize)
+        self._add_hover_functionality(ax_price, all_data, symbols)
 
         # Print summary statistics
-        self._print_summary_stats(all_data, symbols, normalize)
+        self._print_summary_stats(all_data, symbols)
 
         print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
         print("💡 Hover over the lines to see detailed information")
@@ -269,7 +256,7 @@ class Frontend:
                    facecolor='white', edgecolor='none')
         print(f"✓ Plot saved to: {save_path}")
 
-    def _add_statistics_box(self, ax, data_dict: Dict, symbols: List[str], normalize: bool):
+    def _add_statistics_box(self, ax, data_dict: Dict, symbols: List[str]):
         """Add a statistics box to the plot, positioned dynamically to avoid overlap with legend."""
         if not data_dict:
             return
@@ -280,10 +267,11 @@ class Frontend:
                 data = data_dict[symbol]
                 if not data.empty:
                     latest_value = data.iloc[-1]
-                    if normalize:
-                        stats_text.append(f"{symbol}: {latest_value:+.1f}%")
+                    # Check if data appears to be normalized (values around 1 or percentages)
+                    if abs(latest_value) < 10 and latest_value != int(latest_value):
+                        stats_text.append(f"{symbol}: {latest_value:.3f}")
                     else:
-                        stats_text.append(f"{symbol}: ${latest_value:.2f}")
+                        stats_text.append(f"{symbol}: {latest_value:.2f}")
 
         if stats_text:
             stats_str = " | ".join(stats_text)
@@ -310,7 +298,7 @@ class Frontend:
                     verticalalignment='top', horizontalalignment='left',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
-    def _print_summary_stats(self, data_dict: Dict, symbols: List[str], normalize: bool):
+    def _print_summary_stats(self, data_dict: Dict, symbols: List[str]):
         """Print summary statistics to console."""
         print("\n📊 Summary Statistics:")
         print("-" * 50)
@@ -320,17 +308,21 @@ class Frontend:
                 continue
 
             data = data_dict[symbol]
+            latest_value = data.iloc[-1]
 
-            if normalize:
-                print(f"{symbol:>6}: Latest: {data.iloc[-1]:+6.1f}% | "
-                      f"Min: {data.min():+6.1f}% | Max: {data.max():+6.1f}% | "
-                      f"Std: {data.std():5.1f}%")
+            # Auto-detect format based on data range
+            if abs(latest_value) < 10 and latest_value != int(latest_value):
+                # Likely normalized data
+                print(f"{symbol:>6}: Latest: {latest_value:8.3f} | "
+                      f"Min: {data.min():8.3f} | Max: {data.max():8.3f} | "
+                      f"Avg: {data.mean():8.3f}")
             else:
-                print(f"{symbol:>6}: Latest: ${data.iloc[-1]:8.2f} | "
-                      f"Min: ${data.min():8.2f} | Max: ${data.max():8.2f} | "
-                      f"Avg: ${data.mean():8.2f}")
+                # Likely price data
+                print(f"{symbol:>6}: Latest: {latest_value:8.2f} | "
+                      f"Min: {data.min():8.2f} | Max: {data.max():8.2f} | "
+                      f"Avg: {data.mean():8.2f}")
 
-    def _add_hover_functionality(self, ax, data_dict: Dict, symbols: List[str], normalize: bool):
+    def _add_hover_functionality(self, ax, data_dict: Dict, symbols: List[str]):
         """Add interactive hover functionality using mplcursors."""
         if not data_dict:
             return
@@ -365,11 +357,11 @@ class Frontend:
             except:
                 date_val = str(x_val)
 
-            # Format the annotation text based on whether data is normalized
-            if normalize:
-                annotation_text = f"{symbol}\nDate: {date_val}\nChange: {y_val:+.2f}%"
+            # Format the annotation text based on data range
+            if abs(y_val) < 10 and y_val != int(y_val):
+                annotation_text = f"{symbol}\nDate: {date_val}\nValue: {y_val:.3f}"
             else:
-                annotation_text = f"{symbol}\nDate: {date_val}\nPrice: ${y_val:.2f}"
+                annotation_text = f"{symbol}\nDate: {date_val}\nValue: {y_val:.2f}"
 
             sel.annotation.set_text(annotation_text)
             sel.annotation.get_bbox_patch().set(boxstyle="round,pad=0.5",

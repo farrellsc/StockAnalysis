@@ -87,7 +87,7 @@ class Backend:
 
         # Apply normalization if requested
         if normalize:
-            formatted_data = self._normalize_data(formatted_data, 'first')
+            formatted_data = self.normalize_data(formatted_data)
 
         return formatted_data
 
@@ -136,13 +136,12 @@ class Backend:
         final_columns = available_columns + available_adj_columns
         return df_formatted[final_columns].copy() if final_columns else df_formatted
 
-    def _normalize_data(self, df: pd.DataFrame, method: str) -> pd.DataFrame:
+    def normalize_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Normalize price data to percentage change from first value.
 
         Args:
             df (pd.DataFrame): DataFrame with price data
-            method (str): Normalization method (only 'first' is supported)
 
         Returns:
             pd.DataFrame: Normalized DataFrame

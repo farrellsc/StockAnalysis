@@ -1,5 +1,6 @@
 
 import argparse
+from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from datetime import datetime
 import inspect
@@ -11,8 +12,7 @@ from database import Database
 from frontend import Frontend
 from backend import Backend
 from cert import TiingoKey
-from typing import List
-
+from typing import Dict, List, Optional
 
 REGISTRY = {}
 
@@ -24,9 +24,18 @@ def register(f):
     return wrapper
 
 
+@dataclass
+class StockConfig:
+    symbol: str
+    normalize: bool = False
+    data: Optional[DataFrame] = None
+    weights: Optional[Dict[str, float]] = None
+
+
 @register
-def plot_prices(symbols: List[str], start_date: str, end_date: str,
-                         normalize: bool = False, show_volume: bool = False,
+def plot_prices(configs: List[StockConfig], start_date: str, end_date: str,
+                         projected: List[StockConfig] = [],
+                         show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
     """An API to plot curves by reading the database with input symbols. """
@@ -34,102 +43,56 @@ def plot_prices(symbols: List[str], start_date: str, end_date: str,
     frontend = Frontend()
     backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
 
-    # Fetch data for multiple stocks
-    dataframes = []
+    # Fetch data for stocks
+    for config in configs:
+        symbol = config.symbol
+        if config.data is None:
+            if symbol.lower() == 'cpi_inflation':
+                config.data = backend.get_yoy_cpi_inflation(start_date, end_date)
+            elif symbol.lower() == 'tbill_rates':
+                config.data = backend.get_interest_rate(start_date, end_date)
+            elif symbol.lower() == 'unemployment_rate':
+                config.data = backend.get_unemployment_rate(start_date, end_date)
+            else:
+                config.data = backend.get_daily_price(symbol, start_date, end_date)
+        if config.normalize:
+            config.data = backend.normalize_data(config.data)
 
-    for symbol in symbols:
-        print(symbol.lower())
-        if symbol.lower() == 'cpi_inflation':
-            df = backend.get_yoy_cpi_inflation(start_date, end_date)
-        elif symbol.lower() == 'tbill_rates':
-            df = backend.get_interest_rate(start_date, end_date)
-        elif symbol.lower() == 'unemployment_rate':
-            df = backend.get_unemployment_rate(start_date, end_date)
-        else:
-            df = backend.get_daily_price(symbol, start_date, end_date)
-        dataframes.append(df)
+    # Fetch data for projected stocks
+    for config in projected:
+        symbol = config.symbol
+        if config.data is None:
+            if symbol.lower() in ('cpi_inflation', 'tbill_rates', 'unemployment_rate'):
+                raise ValueError("projected signals only support stock atm")
+            aggregated_data = None
+            for source, weight in config.weights.items():
+                source_data = backend.get_daily_price(source, start_date, end_date)
+                # Create a copy to avoid modifying original data
+                weighted_data = source_data.copy()
+                # Apply weight to all price columns for consistency
+                price_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+                for col in price_columns:
+                    if col in weighted_data.columns:
+                        weighted_data[col] *= weight
 
-    # Create comparison plot
-    plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
+                if aggregated_data is None:
+                    aggregated_data = weighted_data
+                else:
+                    # Ensure proper alignment by using add with fill_value=0
+                    aggregated_data = aggregated_data.add(weighted_data, fill_value=0)
 
-    fig = frontend.plot_price_comparison(
-        dataframes=dataframes,
-        symbols=symbols,
-        price_column=price_column,
-        normalize=normalize,
-        show_volume=show_volume,
-        title=plot_title,
-        save_path=save_path
-    )
+            # Only create final DataFrame outside the loop and add symbol
+            if aggregated_data is not None:
+                aggregated_data = DataFrame(aggregated_data)
+                aggregated_data['symbol'] = config.symbol
+            if config.normalize:
+                config.data = backend.normalize_data(aggregated_data)
+            else:
+                config.data = aggregated_data
 
-    return dataframes
-
-
-@register
-def plot_prices_simple(dataframes: List[DataFrame], symbols: List[str], start_date: str, end_date: str,
-                         normalize: bool = False, show_volume: bool = False,
-                         price_column: str = 'Close', save_path: str = None,
-                         title: str = None):
-    """An API to plot curves based on input dataframes and symbols. This API does not access database"""
-    for i in range(len(dataframes)):
-        dataframes[i] = dataframes[i][start_date:end_date]
-
-    # Initialize backend and frontend
-    frontend = Frontend()
-
-    # Create comparison plot
-    plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
-
-    fig = frontend.plot_price_comparison(
-        dataframes=dataframes,
-        symbols=symbols,
-        price_column=price_column,
-        normalize=normalize,
-        show_volume=show_volume,
-        title=plot_title,
-        save_path=save_path
-    )
-
-    return dataframes
-
-
-@register
-def plot_prices_projected(symbols: List[str], weights: List[float], start_date: str, end_date: str,
-                         show_volume: bool = False,
-                         price_column: str = 'Close', save_path: str = None,
-                         title: str = None):
-    """An API to read symbol prices and combining them with "weights" to generate the projected performance of a proposed portfolio. Note that this API always normalizes prices to make them comparable."""
-    if sum(weights) != 1:
-        raise ValueError("weights must sum to 1.")
-    if len(symbols) != len(weights):
-        raise ValueError("symbols must have same length as weights.")
-
-    # Initialize backend and frontend
-    frontend = Frontend()
-    backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
-
-    # Fetch data for multiple stocks
-    dataframes = []
-
-    for symbol in symbols:
-        if symbol.lower() == 'cpi_inflation':
-            df = backend.get_yoy_cpi_inflation(symbol, start_date, end_date)
-        elif symbol.lower() == 'tbill_rates':
-            df = backend.get_interest_rate(start_date, end_date)
-        elif symbol.lower() == 'unemployment_rate':
-            df = backend.get_unemployment_rate(start_date, end_date)
-        else:
-            df = backend.get_daily_price(symbol, start_date, end_date, normalize=True)
-        dataframes.append(df)
-
-    aggregated_price = dataframes[0][price_column] * weights[0]
-    for i in range(1, len(dataframes)):
-        aggregated_price = aggregated_price + dataframes[i][price_column] * weights[i]
-    aggregated_price = DataFrame(aggregated_price)
-    aggregated_symbol = "+".join([f'[{p:.2f}% {s}]'for s, p in zip(symbols, weights)])
-    aggregated_price['symbol'] = aggregated_symbol
-    dataframes.append(aggregated_price)
-    symbols.append(aggregated_symbol)
+    all_configs = configs + projected
+    dataframes = [config.data for config in all_configs]
+    symbols = [config.symbol for config in all_configs]
 
     # Create comparison plot
     plot_title = title or f"Stock Price Comparison: {', '.join(symbols)}"
@@ -138,7 +101,6 @@ def plot_prices_projected(symbols: List[str], weights: List[float], start_date: 
         dataframes=dataframes,
         symbols=symbols,
         price_column=price_column,
-        normalize=False,
         show_volume=show_volume,
         title=plot_title,
         save_path=save_path
@@ -169,14 +131,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
     Examples:
-      # Call plot_price_comparison function
-      python3 main.py plot_price_comparison --symbols AAPL TSLA GOOGL --start 2024-01-01 --end 2024-12-31
-    
-      # Plot with normalization and volume
-      python3 main.py plot_price_comparison --symbols AAPL MSFT --start 2024-01-01 --end 2024-12-31 --normalize --volume
-    
+      # Call plot_prices function
+      python3 main.py plot_prices --symbols AAPL TSLA GOOGL --start 2024-01-01 --end 2024-12-31
+
+      # Plot with normalization for all stocks and volume
+      python3 main.py plot_prices --symbols AAPL MSFT --start 2024-01-01 --end 2024-12-31 --normalize --volume
+
+      # Plot with normalization only for specific stocks
+      python3 main.py plot_prices --symbols AAPL MSFT GOOGL --start 2024-01-01 --end 2024-12-31 --normalize AAPL GOOGL --volume
+
       # Save plot to file
-      python3 main.py plot_price_comparison --symbols AAPL TSLA --start 2024-01-01 --end 2024-12-31 --save plot.png
+      python3 main.py plot_prices --symbols AAPL TSLA --start 2024-01-01 --end 2024-12-31 --save plot.png
             """
         )
 
@@ -184,7 +149,7 @@ def main():
     parser.add_argument('--symbols', nargs='+', help='Stock symbols to plot (e.g., AAPL TSLA GOOGL)')
     parser.add_argument('--start', type=parse_date, required=True, help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end', type=parse_date, required=True, help='End date (YYYY-MM-DD)')
-    parser.add_argument('--normalize', action='store_true', help='Normalize prices to percentage change')
+    parser.add_argument('--normalize', nargs='*', help='Normalize specific stocks (provide stock symbols, or omit for all)')
     parser.add_argument('--volume', action='store_true', help='Show volume subplot')
     parser.add_argument('--column', default='Close',
                        choices=['Open', 'High', 'Low', 'Close', 'Adj Close'],
@@ -197,16 +162,40 @@ def main():
     func = REGISTRY.get(args.function, None)
     # Handle function calls
     if func:
-        func(
-            symbols=args.symbols,
-            start_date=args.start,
-            end_date=args.end,
-            normalize=args.normalize,
-            show_volume=args.volume,
-            price_column=args.column,
-            save_path=args.save,
-            title=args.title
-        )
+        # Create StockConfig objects
+        if args.function == 'plot_prices':
+            # Determine which stocks to normalize
+            normalize_symbols = set()
+            if args.normalize is not None:
+                if len(args.normalize) == 0:
+                    # --normalize with no arguments means normalize all
+                    normalize_symbols = set(args.symbols)
+                else:
+                    # --normalize AAPL TSLA means normalize only those
+                    normalize_symbols = set(args.normalize)
+
+            configs = [StockConfig(symbol=symbol, normalize=(symbol in normalize_symbols))
+                      for symbol in args.symbols]
+
+            func(
+                configs=configs,
+                start_date=args.start,
+                end_date=args.end,
+                show_volume=args.volume,
+                price_column=args.column,
+                save_path=args.save,
+                title=args.title
+            )
+        else:
+            func(
+                symbols=args.symbols,
+                start_date=args.start,
+                end_date=args.end,
+                show_volume=args.volume,
+                price_column=args.column,
+                save_path=args.save,
+                title=args.title
+            )
     else:
         print(f"❌ Unknown function: {args.function}")
         print(f"Available functions: {REGISTRY.keys()}")
