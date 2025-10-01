@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import inspect
 import json
+import pandas as pd
+import os
 
 from pandas import DataFrame
 
@@ -12,8 +14,10 @@ from database import Database
 from frontend import Frontend
 from backend import Backend
 from cert import TiingoKey
+from mock_trade import MockTrade, Trade
 from typing import Dict, List, Optional
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = {}
 
 
@@ -29,14 +33,6 @@ class StockConfig:
     symbol: str
     normalize: bool = False
     data: Optional[DataFrame] = None
-    weights: Optional[Dict[str, float]] = None
-
-@dataclass
-class Trade:
-    symbol: str
-    volume: int  # amount of stocks to buy / sell
-    date: str  # datetime to perform the trade, e.g. '2025-01-01
-    trade: Optional[str] = None  # buy / sell
 
 
 @dataclass
@@ -48,7 +44,7 @@ class MacroConfig:
 
 @register
 def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
-                         trade_history: List[StockConfig] = [],
+                         portfolio: List[Trade] = [],
                          environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
@@ -58,7 +54,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     """
     # Initialize backend and frontend
     frontend = Frontend()
-    backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
+    backend = Backend(database=Database(file_path=os.path.join(BASE_DIR, "data", "stock_data.pkl")))
 
     # Fetch data for stocks
     for config in stocks:
@@ -72,42 +68,46 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
                 config.data = backend.get_unemployment_rate(start_date, end_date)
             else:
                 config.data = backend.get_daily_price(symbol, start_date, end_date)
+
+    # Process portfolio to create portfolio tracking dataframe
+    portfolio_configs = []
+    if portfolio:
+        # Use MockTrade for more sophisticated portfolio simulation
+        print("Using MockTrade for portfolio simulation...")
+        mock_trader = MockTrade(
+            backend=backend,
+            trade_history=portfolio,
+            start_date=start_date,
+            end_date=end_date
+        )
+        portfolio_df = mock_trader.mock()
+
+        # Create portfolio config from MockTrade results
+        final_portfolio_df = pd.DataFrame({
+            'Close': portfolio_df['portfolio_value'],
+            'Open': portfolio_df['portfolio_value'],
+            'High': portfolio_df['portfolio_value'],
+            'Low': portfolio_df['portfolio_value']
+        }, index=portfolio_df.index)
+        final_portfolio_df['symbol'] = 'Portfolio'
+
+        portfolio_config = StockConfig(symbol='Portfolio', data=final_portfolio_df, normalize=True)
+        portfolio_configs.append(portfolio_config)
+
+    all_configs = stocks + portfolio_configs
+
+    for i, config in enumerate(all_configs):
         if config.normalize:
             config.data = backend.normalize_data(config.data)
-
-    # Fetch data for projected stocks
-    for config in trade_history:
-        symbol = config.symbol
-        if config.data is None:
-            if symbol.lower() in ('cpi_inflation', 'tbill_rates', 'unemployment_rate'):
-                raise ValueError("projected_stocks signals only support stock atm")
-            aggregated_data = None
-            for source, weight in config.weights.items():
-                source_data = backend.get_daily_price(source, start_date, end_date)
-                # Create a copy to avoid modifying original data
-                weighted_data = source_data.copy()
-                # Apply weight to all price columns for consistency
-                price_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close']
-                for col in price_columns:
-                    if col in weighted_data.columns:
-                        weighted_data[col] *= weight
-
-                if aggregated_data is None:
-                    aggregated_data = weighted_data
-                else:
-                    # Ensure proper alignment by using add with fill_value=0
-                    aggregated_data = aggregated_data.add(weighted_data, fill_value=0)
-
-            # Only create final DataFrame outside the loop and add symbol
-            if aggregated_data is not None:
-                aggregated_data = DataFrame(aggregated_data)
-                aggregated_data['symbol'] = config.symbol
-            if config.normalize:
-                config.data = backend.normalize_data(aggregated_data)
+        data_info = f"{len(config.data)} rows" if config.data is not None else "None"
+        print(f"  {i}: {config.symbol} - {data_info}")
+        if config.data is not None and len(config.data) > 0:
+            if price_column in config.data.columns:
+                price_range = f"{config.data[price_column].min():.2f} to {config.data[price_column].max():.2f}"
+                print(f"      Price range: {price_range}")
             else:
-                config.data = aggregated_data
+                print(f"      Columns: {list(config.data.columns)}")
 
-    all_configs = stocks + projected_stocks
     dataframes = [config.data for config in all_configs]
     symbols = [config.symbol for config in all_configs]
 
@@ -147,11 +147,71 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     return dataframes
 
 @register
-def buy_recipe(capital: int, percent: float, distribution: dict):
-    """Given a set of parameters, compute the buying recipe"""
+def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
+    """
+    Given a set of parameters, compute the buying recipe with actual stock volumes.
+
+    Args:
+        capital (int): Total available capital
+        percent (float): Percentage of capital to invest (0.0 to 1.0)
+        distribution (dict): Symbol -> percentage allocation (e.g., {'AAPL': 0.5, 'GOOGL': 0.5})
+        ds (str): Date string in 'YYYY-MM-DD' format to get stock prices
+
+    Returns:
+        dict: Symbol -> volume mapping with actual share quantities
+    """
+    # Initialize backend to get stock prices
+    backend = Backend(database=Database(file_path=os.path.join(BASE_DIR, "data", "stock_data.pkl")))
+
+    # Round date to next business day if needed
+    target_date = pd.to_datetime(ds)
+    if target_date.weekday() >= 5:  # Saturday (5) or Sunday (6)
+        target_date = target_date + pd.Timedelta(days=7 - target_date.weekday())
+        ds_adjusted = target_date.strftime('%Y-%m-%d')
+        print(f"Adjusted weekend date {ds} to business day {ds_adjusted}")
+        ds = ds_adjusted
+
     buy_amount = capital * percent
+    recipe = {}
+
+    print(f"Buy Recipe for {ds} with ${buy_amount:.2f} (${capital} × {percent:.1%}):")
+    print("-" * 50)
+
     for symbol, symbol_perc in distribution.items():
-        print(f"{symbol}: buy {buy_amount * symbol_perc}")
+        allocation_amount = buy_amount * symbol_perc
+
+        try:
+            # Get stock price for the specified date
+            price_data = backend.get_daily_price(symbol, ds, ds)
+
+            if price_data is not None and len(price_data) > 0:
+                stock_price = price_data['Close'].iloc[0]
+                volume = int(allocation_amount / stock_price)
+                actual_cost = volume * stock_price
+
+                recipe[symbol] = volume
+
+                print(f"{symbol}: {volume} shares @ ${stock_price:.2f} = ${actual_cost:.2f} "
+                      f"({symbol_perc:.1%} allocation)")
+            else:
+                print(f"{symbol}: No price data available for {ds}")
+                recipe[symbol] = 0
+
+        except Exception as e:
+            print(f"{symbol}: Error getting price data - {e}")
+            recipe[symbol] = 0
+
+    total_actual_cost = sum(
+        recipe[symbol] * backend.get_daily_price(symbol, ds, ds)['Close'].iloc[0]
+        for symbol in recipe
+        if recipe[symbol] > 0 and backend.get_daily_price(symbol, ds, ds) is not None
+    )
+
+    print("-" * 50)
+    print(f"Total cost: ${total_actual_cost:.2f} of ${buy_amount:.2f} allocated")
+    print(f"Remaining cash: ${buy_amount - total_actual_cost:.2f}")
+
+    return recipe
 
 
 def parse_date(date_str: str) -> str:
