@@ -31,6 +31,13 @@ class StockConfig:
     data: Optional[DataFrame] = None
     weights: Optional[Dict[str, float]] = None
 
+@dataclass
+class Trade:
+    symbol: str
+    volume: int  # amount of stocks to buy / sell
+    date: str  # datetime to perform the trade, e.g. '2025-01-01
+    trade: Optional[str] = None  # buy / sell
+
 
 @dataclass
 class MacroConfig:
@@ -41,12 +48,14 @@ class MacroConfig:
 
 @register
 def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
-                         projected_stocks: List[StockConfig] = [],
+                         trade_history: List[StockConfig] = [],
                          environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
                          title: str = None):
-    """An API to plot curves by reading the database with input symbols. """
+    """
+    An API to plot curves by reading the database with input symbols.
+    """
     # Initialize backend and frontend
     frontend = Frontend()
     backend = Backend(database=Database(file_path="./data/stock_data.pkl"))
@@ -67,7 +76,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
             config.data = backend.normalize_data(config.data)
 
     # Fetch data for projected stocks
-    for config in projected_stocks:
+    for config in trade_history:
         symbol = config.symbol
         if config.data is None:
             if symbol.lower() in ('cpi_inflation', 'tbill_rates', 'unemployment_rate'):
@@ -130,8 +139,8 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
         show_volume=show_volume,
         title=plot_title,
         save_path=save_path,
-        secondary_dataframes=secondary_dataframes,
-        secondary_symbols=secondary_symbols,
+        secondary_dataframes=secondary_dataframes if secondary_dataframes else None,
+        secondary_symbols=secondary_symbols if secondary_symbols else None,
         secondary_ylabel=secondary_ylabel,
     )
 

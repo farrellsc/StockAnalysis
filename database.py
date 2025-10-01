@@ -449,8 +449,8 @@ class Database:
         if split_col is None:
             return pd.DataFrame(columns=['date', 'split_factor'])
 
-        # Find dates where split factor > 1
-        splits = symbol_data[symbol_data[split_col] > 1.0].copy()
+        # Find dates where split factor != 1 (includes both > 1 and < 1 splits)
+        splits = symbol_data[symbol_data[split_col] != 1.0].copy()
 
         if len(splits) == 0:
             return pd.DataFrame(columns=['date', 'split_factor'])
