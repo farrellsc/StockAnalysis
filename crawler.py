@@ -373,8 +373,7 @@ class Crawler:
 
     def backfill_portfolio_stocks(self, portfolio_names: List[str], force: bool = False) -> Dict[str, List[str]]:
         """
-        Load specific portfolio files by name, extract stock symbols and dates,
-        and backfill stock data up to those dates.
+        Fetch all data for the symbols until the biggest date defined in portfolio.
 
         Args:
             portfolio_names (List[str]): List of portfolio file names (without .json extension)
@@ -383,12 +382,11 @@ class Crawler:
         Returns:
             Dict[str, List[str]]: Summary of successful and failed symbols
         """
-        # Import here to avoid circular imports
         import json
 
         print(f"🔍 Processing {len(portfolio_names)} portfolio file(s)")
 
-        # Build full file paths
+        # Build full file paths and validate
         portfolio_files = []
         for name in portfolio_names:
             portfolio_file = os.path.join(PORTFOLIO_DIR, f"{name}.json")
@@ -402,9 +400,9 @@ class Crawler:
             print(f"❌ No valid portfolio files found")
             return {"successful": [], "failed": []}
 
-        # Extract all stock symbols and their earliest required dates
+        # Extract all stock symbols and find the biggest (latest) date
         all_symbols = set()
-        symbol_dates = {}  # symbol -> earliest date needed
+        biggest_date = None
 
         for portfolio_file in portfolio_files:
             try:
@@ -413,27 +411,21 @@ class Crawler:
                 with open(portfolio_file, 'r') as f:
                     portfolio_data = json.load(f)
 
-                # Extract dates and compositions
+                # Find the biggest date and extract all symbols
                 for date_str, compositions in portfolio_data.items():
                     try:
                         # Parse the date
                         portfolio_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-                        portfolio_date_str = portfolio_date.strftime("%Y-%m-%d")
+
+                        # Track the biggest (latest) date
+                        if biggest_date is None or portfolio_date > biggest_date:
+                            biggest_date = portfolio_date
 
                         # Extract stock symbols from compositions
                         if isinstance(compositions, dict):
                             for symbol in compositions.keys():
                                 if isinstance(symbol, str) and symbol.upper() not in ['CASH', 'TOTAL']:
-                                    symbol_upper = symbol.upper()
-                                    all_symbols.add(symbol_upper)
-
-                                    # Track earliest date needed for this symbol
-                                    if symbol_upper not in symbol_dates:
-                                        symbol_dates[symbol_upper] = portfolio_date_str
-                                    else:
-                                        # Keep the earlier date
-                                        if portfolio_date_str < symbol_dates[symbol_upper]:
-                                            symbol_dates[symbol_upper] = portfolio_date_str
+                                    all_symbols.add(symbol.upper())
 
                     except ValueError as e:
                         print(f"⚠️  Skipping invalid date format in {portfolio_file}: {date_str}")
@@ -447,24 +439,66 @@ class Crawler:
             print("📝 No stock symbols found in portfolio files")
             return {"successful": [], "failed": []}
 
-        print(f"🎯 Found {len(all_symbols)} unique stock symbols:")
-        for symbol in sorted(all_symbols):
-            earliest_date = symbol_dates.get(symbol, "Unknown")
-            print(f"   {symbol}: earliest needed date {earliest_date}")
+        if biggest_date is None:
+            print("❌ No valid dates found in portfolio files")
+            return {"successful": [], "failed": list(all_symbols)}
 
-        # Determine the overall earliest date and latest date
-        if symbol_dates:
-            earliest_overall = min(symbol_dates.values())
-            # Use today as end date to ensure we have current data
-            latest_overall = datetime.now().strftime("%Y-%m-%d")
+        # Convert biggest date to string format
+        end_date = biggest_date.strftime("%Y-%m-%d")
 
-            print(f"📅 Backfilling data from {earliest_overall} to {latest_overall}")
+        print(f"🎯 Found {len(all_symbols)} unique stock symbols")
+        print(f"📅 Biggest date in portfolio: {end_date}")
 
-            # Crawl all symbols for the required date range
+        # Query database to find the actual start date for each symbol
+        database = self._get_database()
+        symbols_list = sorted(list(all_symbols))
+
+        if database is not None:
+            # Find the earliest start date needed across all symbols
+            earliest_start_date = None
+
+            for symbol in symbols_list:
+                try:
+                    # Get the date range for this symbol in existing data
+                    date_range = database.get_date_range(symbol=symbol)
+                    existing_end_date = date_range.get('end_date')
+
+                    if existing_end_date:
+                        # Parse existing end date and add 1 day for backfill start
+                        existing_end = datetime.strptime(existing_end_date, "%Y-%m-%d")
+                        symbol_start_date = (existing_end + timedelta(days=1)).strftime("%Y-%m-%d")
+                        print(f"   {symbol}: existing data until {existing_end_date}, will fetch from {symbol_start_date}")
+                    else:
+                        # No existing data, use 2 years before biggest date as fallback
+                        symbol_start_date = (biggest_date - timedelta(days=730)).strftime("%Y-%m-%d")
+                        print(f"   {symbol}: no existing data, will fetch from {symbol_start_date}")
+
+                    # Track the earliest start date needed
+                    if earliest_start_date is None or symbol_start_date < earliest_start_date:
+                        earliest_start_date = symbol_start_date
+
+                except Exception as e:
+                    # Error checking existing data, use fallback
+                    symbol_start_date = (biggest_date - timedelta(days=730)).strftime("%Y-%m-%d")
+                    print(f"   {symbol}: error checking existing data, will fetch from {symbol_start_date}")
+
+                    if earliest_start_date is None or symbol_start_date < earliest_start_date:
+                        earliest_start_date = symbol_start_date
+
+            start_date = earliest_start_date
+        else:
+            # No database yet, use 2 years before biggest date as fallback
+            start_date = (biggest_date - timedelta(days=730)).strftime("%Y-%m-%d")
+            print("📊 No existing database found, using 2-year lookback")
+
+        print(f"📊 Fetching data from {start_date} to {end_date}")
+
+        try:
+            # Crawl all symbols from start_date to biggest_date
             result_path = self.crawl(
-                symbols=list(all_symbols),
-                start_date=earliest_overall,
-                end_date=latest_overall,
+                symbols=symbols_list,
+                start_date=start_date,
+                end_date=end_date,
                 force=force
             )
 
@@ -472,11 +506,11 @@ class Crawler:
             print(f"📁 Data saved to: {result_path}")
 
             # Return success - the crawl method handles detailed success/failure reporting
-            return {"successful": list(all_symbols), "failed": []}
+            return {"successful": symbols_list, "failed": []}
 
-        else:
-            print("❌ No valid dates found in portfolio files")
-            return {"successful": [], "failed": list(all_symbols)}
+        except Exception as e:
+            print(f"❌ Error during data crawling: {e}")
+            return {"successful": [], "failed": symbols_list}
 
     def get_quota_status(self) -> Optional[Dict]:
         """Get current quota status information from the API source."""
