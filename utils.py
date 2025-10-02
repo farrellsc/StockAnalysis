@@ -2,6 +2,9 @@ from datetime import datetime, timedelta
 import requests
 
 
+INF = float('inf')
+
+
 def datetime_from_str(date: str):
     return datetime.strptime(date, '%Y-%m-%d')
 

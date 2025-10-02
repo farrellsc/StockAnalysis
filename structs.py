@@ -22,3 +22,8 @@ class Trade:
     symbol: str
     volume: int  # amount of stocks to buy (positive) / sell (negative)
     date: str  # datetime to perform the trade, e.g. '2025-01-01'
+
+@dataclass
+class Portfolio:
+    name: str
+    trade_history: List[Trade]

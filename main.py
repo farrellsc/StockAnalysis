@@ -1,9 +1,6 @@
 
 import argparse
-import matplotlib.pyplot as plt
 from datetime import datetime
-import inspect
-import json
 import pandas as pd
 import os
 
@@ -11,8 +8,9 @@ from database import Database
 from frontend import Frontend
 from backend import Backend
 from mock_trade import MockTrade
-from typing import List
-from structs import StockConfig, MacroConfig, Trade
+from typing import Dict, List
+from utils import INF
+from structs import StockConfig, MacroConfig, Trade, Portfolio
 from logging_config import setup_logging, set_verbose_mode, set_quiet_mode
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +26,7 @@ def register(f):
 
 @register
 def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
-                         portfolio: List[Trade] = [],
+                         portfolios: List[Portfolio] = [],
                          environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
@@ -55,16 +53,18 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
 
     # Process portfolio to create portfolio tracking dataframe
     portfolio_configs = []
-    if portfolio:
+    if portfolios:
         # Use MockTrade for more sophisticated portfolio simulation
         print("Using MockTrade for portfolio simulation...")
-        mock_trader = MockTrade(
-            backend=backend,
-            trade_history=portfolio,
-            start_date=start_date,
-            end_date=end_date
-        )
-        portfolio_config = mock_trader.mock(as_stock_config=True)
+        for portfolio in portfolios:
+            mock_trader = MockTrade(
+                backend=backend,
+                trade_history=portfolio.trade_history,
+                start_date=start_date,
+                end_date=end_date,
+                name=portfolio.name,
+            )
+            portfolio_configs.append(mock_trader.mock(as_stock_config=True))
 
     all_configs = stocks + portfolio_configs
 

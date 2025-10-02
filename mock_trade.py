@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from backend import Backend
 from pandas import DataFrame
 import pandas as pd
-from structs import Trade
+from structs import Trade, StockConfig
 
 
 @dataclass
@@ -22,8 +22,9 @@ class MockTrade:
         self.current_trade_index: int = 0
         self.initial_investment: float = 0.0
         self._cached_trade_dates: Dict[int, pd.Timestamp] = {}  # Cache adjusted trade dates
+        self._executed_volumes: Dict[int, int] = {}  # Cache actual executed volumes (after clipping)
 
-    def mock(self, as_stock_config: bool = True) -> DataFrame:
+    def mock(self, as_stock_config: bool = True) -> Union[DataFrame, StockConfig]:
         """Execute the mock trading simulation and return portfolio performance."""
         self.initialize_mock()
 
@@ -40,7 +41,8 @@ class MockTrade:
                 'Low': self.portfolio_df['portfolio_value']
             }, index=self.portfolio_df.index)
             final_portfolio_df['symbol'] = self.name
-            portfolio_config = StockConfig(symbol=self.name, data=final_portfolio_df)
+            portfolio_config = StockConfig(symbol=self.name, data=final_portfolio_df, normalize=True)
+            return portfolio_config
         else:
             return self.portfolio_df
 
@@ -158,29 +160,57 @@ class MockTrade:
 
         return holdings
 
-    def _apply_clipping_logic(self, trade: Trade, trade_index: int, target_date: pd.Timestamp) -> int:
+    def _apply_clipping_logic(self, trade: Trade, trade_index: int, target_date: pd.Timestamp, current_cash: float = None) -> tuple:
         """
-        Apply clipping logic for sell orders that exceed available holdings.
+        Apply clipping logic for both sell orders (holdings) and buy orders (cash).
 
         Args:
             trade: The trade to potentially clip
             trade_index: Index of the current trade (for replay calculation)
             target_date: Date up to which to calculate holdings
+            current_cash: Available cash for buy orders (None if not checking cash)
 
         Returns:
-            int: The actual volume after clipping (same as original if no clipping needed)
+            tuple: (actual_volume, was_clipped, clip_reason)
         """
         actual_volume = trade.volume
+        was_clipped = False
+        clip_reason = None
 
-        if trade.volume < 0:  # Sell order
+        if trade.volume < 0:  # Sell order - check holdings
             # Calculate holdings at the trade date by replaying all previous trades
             holdings_at_date = self._calculate_holdings_at_date(trade.symbol, target_date, trade_index)
             max_sellable = -holdings_at_date  # Negative because volume is negative for sells
 
             if trade.volume < max_sellable:  # Trying to sell more than we have
                 actual_volume = max_sellable
+                was_clipped = True
+                clip_reason = f"sell_holdings_{holdings_at_date}"
 
-        return actual_volume
+        elif trade.volume > 0 and current_cash is not None:  # Buy order - check cash
+            # Get current price for this trade
+            if trade.symbol in self.symbol_data:
+                prices = self.symbol_data[trade.symbol]['Close'].reindex(self.date_range, method='ffill')
+                if target_date in prices.index:
+                    trade_price = prices.loc[target_date]
+                    trade_value = trade.volume * trade_price
+                    cash_change = -trade_value
+
+                    # Handle infinite values that can't be rounded
+                    cash_after_trade = current_cash + cash_change
+                    if not (abs(cash_after_trade) < float('inf')) or round(cash_after_trade) < 0:
+                        # Ensure we have valid numbers before calculating affordable volume
+                        if pd.isna(current_cash) or pd.isna(trade_price) or trade_price <= 0:
+                            max_affordable_volume = 0
+                        else:
+                            max_affordable_volume = int(current_cash / trade_price)
+
+                        if max_affordable_volume < trade.volume:
+                            actual_volume = max_affordable_volume
+                            was_clipped = True
+                            clip_reason = f"buy_cash_{current_cash:.2f}"
+
+        return actual_volume, was_clipped, clip_reason
 
     def trade_one(self):
         """
@@ -214,35 +244,28 @@ class MockTrade:
                 cash_change = -trade_value
                 current_cash = self.portfolio_df.loc[trade_date, 'cash']
 
-                # Check if we have enough cash for buy orders
-                if volume > 0:  # Buy order
-                    if current_cash + cash_change < 0:
-                        max_affordable_volume = int(current_cash / trade_price)
-                        raise ValueError(
-                            f"Insufficient cash for trade on {trade_date.date()}: trying to buy {volume} shares of {symbol} "
-                            f"at ${trade_price:.2f} = ${trade_value:.2f}, but only have ${current_cash:.2f} cash. "
-                            f"Maximum affordable volume: {max_affordable_volume} shares "
-                            f"(${max_affordable_volume * trade_price:.2f})"
-                        )
+                # Apply unified clipping logic for both sell and buy orders
+                actual_volume, was_clipped, clip_reason = self._apply_clipping_logic(
+                    trade, self.current_trade_index, trade_date, current_cash
+                )
 
-                # Apply clipping logic using shared method
-                actual_volume = self._apply_clipping_logic(trade, self.current_trade_index, trade_date)
+                # Update cash change and trade value to match actual volume
+                actual_trade_value = actual_volume * trade_price
+                cash_change = -actual_trade_value
+                trade_value = actual_trade_value
 
-                if actual_volume != volume:
-                    # Update cash change and trade value to match actual trade
-                    actual_trade_value = actual_volume * trade_price
-                    cash_change = -actual_trade_value
-                    trade_value = actual_trade_value
+                # Print clipping warnings
+                if was_clipped:
+                    if clip_reason.startswith("buy_cash"):
+                        print(f"WARNING: Buy order clipped - trying to buy {volume} {symbol} but only have ${current_cash:.2f} cash")
+                        print(f"         Adjusted to buy {actual_volume} shares instead (${trade_value:.2f})")
+                    elif clip_reason.startswith("sell_holdings"):
+                        holdings_before_trade = int(clip_reason.split("_")[-1])
+                        print(f"WARNING: Sell order clipped - trying to sell {abs(volume)} {symbol} but only have {holdings_before_trade} shares")
+                        print(f"         Adjusted to sell {abs(actual_volume)} shares instead")
 
-                    holdings_before_trade = 0
-                    for i in range(self.current_trade_index):
-                        prev_trade = self.trade_history[i]
-                        prev_trade_date = self._cached_trade_dates[i]
-                        if prev_trade.symbol == symbol and prev_trade_date <= trade_date:
-                            holdings_before_trade += self._apply_clipping_logic(prev_trade, i, prev_trade_date)
-
-                    print(f"WARNING: Sell order clipped - trying to sell {abs(volume)} {symbol} but only have {holdings_before_trade} shares")
-                    print(f"         Adjusted to sell {abs(actual_volume)} shares instead")
+                # Store the actual executed volume for portfolio calculations
+                self._executed_volumes[self.current_trade_index] = actual_volume
 
                 # Update holdings
                 self.holdings[symbol] += actual_volume
@@ -270,7 +293,7 @@ class MockTrade:
         # Build holdings using vectorized operations
         holdings_df = pd.DataFrame(0, index=self.date_range, columns=list(self.holdings.keys()))
 
-        # Process trades efficiently using cached dates
+        # Process trades efficiently using cached dates and executed volumes
         for i in range(self.current_trade_index + 1):
             trade = self.trade_history[i]
             trade_date = self._cached_trade_dates[i]  # Use cached date
@@ -278,9 +301,17 @@ class MockTrade:
             if trade_date not in self.date_range:
                 continue
 
+            # Use actual executed volume (after clipping) instead of original trade volume
+            if i in self._executed_volumes:
+                executed_volume = self._executed_volumes[i]
+            else:
+                executed_volume, _, _ = self._apply_clipping_logic(trade, i, trade_date)
+                # For consistency, also cache this calculated volume
+                self._executed_volumes[i] = executed_volume
+
             # Vectorized update - much faster than loop
             mask = holdings_df.index >= trade_date
-            holdings_df.loc[mask, trade.symbol] += trade.volume
+            holdings_df.loc[mask, trade.symbol] += executed_volume
 
         # Vectorized portfolio value calculation
         total_values = pd.Series(0.0, index=self.date_range)
@@ -346,8 +377,11 @@ class MockTrade:
         for i, trade in enumerate(self.trade_history):
             trade_date = self._cached_trade_dates[i]
             if trade_date <= target_date:
-                # Use shared clipping logic method
-                actual_volume = self._apply_clipping_logic(trade, i, target_date)
+                # Use actual executed volume if available, otherwise calculate clipping
+                if i in self._executed_volumes:
+                    actual_volume = self._executed_volumes[i]
+                else:
+                    actual_volume, _, _ = self._apply_clipping_logic(trade, i, target_date)
                 holdings_at_date[trade.symbol] += actual_volume
             else:
                 break
@@ -443,8 +477,11 @@ class MockTrade:
             for i, trade in enumerate(self.trade_history):
                 trade_date = self._cached_trade_dates[i]
                 if trade_date <= date and trade.symbol in all_symbols:
-                    # Use shared clipping logic method
-                    actual_volume = self._apply_clipping_logic(trade, i, date)
+                    # Use actual executed volume if available, otherwise calculate clipping
+                    if i in self._executed_volumes:
+                        actual_volume = self._executed_volumes[i]
+                    else:
+                        actual_volume, _, _ = self._apply_clipping_logic(trade, i, date)
                     holdings_at_date[trade.symbol] += actual_volume
 
             # Get values for this date
