@@ -173,15 +173,25 @@ def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
             print(f"{symbol}: Error getting price data - {e}")
             recipe[symbol] = 0
 
-    total_actual_cost = sum(
-        recipe[symbol] * backend.get_daily_price(symbol, ds, ds)['Close'].iloc[0]
-        for symbol in recipe
-        if recipe[symbol] > 0 and backend.get_daily_price(symbol, ds, ds) is not None
-    )
+    # Calculate total actual cost more efficiently and safely
+    total_actual_cost = 0.0
+    for symbol in recipe:
+        if recipe[symbol] > 0:
+            try:
+                price_data = backend.get_daily_price(symbol, ds, ds)
+                if price_data is not None and len(price_data) > 0:
+                    stock_price = price_data['Close'].iloc[0]
+                    total_actual_cost += recipe[symbol] * stock_price
+            except Exception:
+                # Skip symbols with price data issues
+                continue
+
+    # Ensure remaining cash is never negative (handle rounding errors)
+    remaining_cash = max(0.0, buy_amount - total_actual_cost)
 
     print("-" * 50)
     print(f"Total cost: ${total_actual_cost:.2f} of ${buy_amount:.2f} allocated")
-    print(f"Remaining cash: ${buy_amount - total_actual_cost:.2f}")
+    print(f"Remaining cash: ${remaining_cash:.2f}")
 
     return recipe
 

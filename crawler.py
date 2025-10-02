@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 from database import Database
 from api_source import ApiSource, TiingoApiSource, AshareApiSource
+from structs import BASE_DIR, DATA_DIR, PORTFOLIO_DIR
 
 
 class Crawler:
@@ -17,19 +18,19 @@ class Crawler:
     and saves all data in a single consolidated DataFrame with proper indexing.
     """
 
-    def __init__(self, api_source: Optional[ApiSource] = None, data_dir: str = "data",
+    def __init__(self, api_source: Optional[ApiSource] = None, data_dir: str = None,
                  consolidated_file: str = "stock_data.pkl", **source_config):
         """
         Initialize the Crawler with a configurable data source.
 
         Args:
             api_source (ApiSource, optional): Data source instance. If None, defaults to TiingoApiSource
-            data_dir (str): Directory to save pickle files. Defaults to "data"
+            data_dir (str): Directory to save pickle files. If None, uses DATA_DIR from structs
             consolidated_file (str): Name of the consolidated pickle file. Defaults to "stock_data.pkl"
             **source_config: Configuration passed to data source if creating default
         """
-        self.data_dir = data_dir
-        self.consolidated_file_path = os.path.join(data_dir, consolidated_file)
+        self.data_dir = data_dir if data_dir is not None else DATA_DIR
+        self.consolidated_file_path = os.path.join(self.data_dir, consolidated_file)
         self._database = None  # Lazy initialization
 
         # Use provided data source or create default Tiingo source
@@ -369,6 +370,113 @@ class Crawler:
 
         except Exception as e:
             raise Exception(f"Failed to create database: {e}")
+
+    def backfill_portfolio_stocks(self, portfolio_names: List[str], force: bool = False) -> Dict[str, List[str]]:
+        """
+        Load specific portfolio files by name, extract stock symbols and dates,
+        and backfill stock data up to those dates.
+
+        Args:
+            portfolio_names (List[str]): List of portfolio file names (without .json extension)
+            force (bool): Whether to force re-download existing data
+
+        Returns:
+            Dict[str, List[str]]: Summary of successful and failed symbols
+        """
+        # Import here to avoid circular imports
+        import json
+
+        print(f"🔍 Processing {len(portfolio_names)} portfolio file(s)")
+
+        # Build full file paths
+        portfolio_files = []
+        for name in portfolio_names:
+            portfolio_file = os.path.join(PORTFOLIO_DIR, f"{name}.json")
+            if os.path.exists(portfolio_file):
+                portfolio_files.append(portfolio_file)
+                print(f"✓ Found: {name}.json")
+            else:
+                print(f"⚠️  Not found: {name}.json")
+
+        if not portfolio_files:
+            print(f"❌ No valid portfolio files found")
+            return {"successful": [], "failed": []}
+
+        # Extract all stock symbols and their earliest required dates
+        all_symbols = set()
+        symbol_dates = {}  # symbol -> earliest date needed
+
+        for portfolio_file in portfolio_files:
+            try:
+                print(f"📄 Processing: {os.path.basename(portfolio_file)}")
+
+                with open(portfolio_file, 'r') as f:
+                    portfolio_data = json.load(f)
+
+                # Extract dates and compositions
+                for date_str, compositions in portfolio_data.items():
+                    try:
+                        # Parse the date
+                        portfolio_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                        portfolio_date_str = portfolio_date.strftime("%Y-%m-%d")
+
+                        # Extract stock symbols from compositions
+                        if isinstance(compositions, dict):
+                            for symbol in compositions.keys():
+                                if isinstance(symbol, str) and symbol.upper() not in ['CASH', 'TOTAL']:
+                                    symbol_upper = symbol.upper()
+                                    all_symbols.add(symbol_upper)
+
+                                    # Track earliest date needed for this symbol
+                                    if symbol_upper not in symbol_dates:
+                                        symbol_dates[symbol_upper] = portfolio_date_str
+                                    else:
+                                        # Keep the earlier date
+                                        if portfolio_date_str < symbol_dates[symbol_upper]:
+                                            symbol_dates[symbol_upper] = portfolio_date_str
+
+                    except ValueError as e:
+                        print(f"⚠️  Skipping invalid date format in {portfolio_file}: {date_str}")
+                        continue
+
+            except Exception as e:
+                print(f"❌ Error processing {portfolio_file}: {e}")
+                continue
+
+        if not all_symbols:
+            print("📝 No stock symbols found in portfolio files")
+            return {"successful": [], "failed": []}
+
+        print(f"🎯 Found {len(all_symbols)} unique stock symbols:")
+        for symbol in sorted(all_symbols):
+            earliest_date = symbol_dates.get(symbol, "Unknown")
+            print(f"   {symbol}: earliest needed date {earliest_date}")
+
+        # Determine the overall earliest date and latest date
+        if symbol_dates:
+            earliest_overall = min(symbol_dates.values())
+            # Use today as end date to ensure we have current data
+            latest_overall = datetime.now().strftime("%Y-%m-%d")
+
+            print(f"📅 Backfilling data from {earliest_overall} to {latest_overall}")
+
+            # Crawl all symbols for the required date range
+            result_path = self.crawl(
+                symbols=list(all_symbols),
+                start_date=earliest_overall,
+                end_date=latest_overall,
+                force=force
+            )
+
+            print(f"✅ Portfolio stock data backfill completed")
+            print(f"📁 Data saved to: {result_path}")
+
+            # Return success - the crawl method handles detailed success/failure reporting
+            return {"successful": list(all_symbols), "failed": []}
+
+        else:
+            print("❌ No valid dates found in portfolio files")
+            return {"successful": [], "failed": list(all_symbols)}
 
     def get_quota_status(self) -> Optional[Dict]:
         """Get current quota status information from the API source."""
