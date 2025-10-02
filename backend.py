@@ -3,22 +3,30 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 import os
+import logging
 from database import Database
+from logging_config import LoggingConfig
 
 
 class Backend:
     """Backend class for stock data access using existing Database only."""
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, log_level: str = 'INFO'):
         """
         Initialize the Backend with Database-only access.
 
         Args:
             database (Database): A database to visit data from
+            log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
         """
         self.database = database
 
-        print(f"✓ Backend initialized with database-only access: {database.file_path}")
+        # Set up logging using centralized config
+        self.logger = LoggingConfig.get_logger('backend')
+        if log_level:
+            LoggingConfig.set_level_for_component('backend', log_level)
+
+        self.logger.info(f"Backend initialized with database-only access: {database.file_path}")
 
     def _get_database(self) -> Database:
         return self.database
@@ -26,9 +34,13 @@ class Backend:
     def _get_data_from_database(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> Optional[pd.DataFrame]:
         """Get data from database with proper error handling."""
         try:
+            self.logger.debug(f"Retrieving data for {symbol} from {start_date} to {end_date}, source: {source}")
             database = self._get_database()
-            return database.get_cached_data(symbol, start_date, end_date, source=source)
+            data = database.get_cached_data(symbol, start_date, end_date, source=source)
+            self.logger.debug(f"Retrieved {len(data) if data is not None else 0} rows for {symbol}")
+            return data
         except Exception as e:
+            self.logger.error(f"Failed to access database for {symbol}: {e}")
             raise Exception(f"Failed to access database: {e}")
 
     def has_data_for_period(self, symbol: str, start_date: str, end_date: str, source: Optional[str] = None) -> bool:
@@ -82,7 +94,7 @@ class Backend:
                     f"Available data range: {date_range.get('start_date', 'N/A')} to {date_range.get('end_date', 'N/A')}"
                 )
 
-        print(f"📂 Retrieved {len(data)} days of data for {symbol.upper()} from database")
+        self.logger.info(f"Retrieved {len(data)} days of data for {symbol.upper()} from database")
         formatted_data = self._format_output_dataframe(data)
 
         # Apply normalization if requested
@@ -332,7 +344,7 @@ class Backend:
         # Remove rows with NaN values (dates without valid YoY calculation)
         result = result.dropna()
 
-        print(f"✓ Calculated year-over-year CPI changes: {len(result)} data points")
+        self.logger.info(f"Calculated year-over-year CPI changes: {len(result)} data points")
 
         return result
 
@@ -368,7 +380,7 @@ class Backend:
             if len(yoy_data) == 0:
                 raise ValueError("No YoY CPI inflation data found for the specified date range")
 
-            print(f"📈 Retrieved {len(yoy_data)} days of YoY CPI inflation data")
+            self.logger.info(f"Retrieved {len(yoy_data)} days of YoY CPI inflation data")
             return self._format_output_dataframe(yoy_data)
 
         except Exception as e:
@@ -397,7 +409,7 @@ class Backend:
             if data is None or len(data) == 0:
                 raise ValueError(f"No unemployment rate data found for the specified period")
 
-            print(f"📊 Retrieved {len(data)} days of unemployment rate data")
+            self.logger.info(f"Retrieved {len(data)} days of unemployment rate data")
             return self._format_output_dataframe(data)
 
         except Exception as e:
@@ -426,7 +438,7 @@ class Backend:
             if data is None or len(data) == 0:
                 raise ValueError(f"No interest rate data found for the specified period")
 
-            print(f"💰 Retrieved {len(data)} days of interest rate data")
+            self.logger.info(f"Retrieved {len(data)} days of interest rate data")
             return self._format_output_dataframe(data)
 
         except Exception as e:

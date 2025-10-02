@@ -16,6 +16,7 @@ from backend import Backend
 from cert import TiingoKey
 from mock_trade import MockTrade, Trade
 from typing import Dict, List, Optional
+from logging_config import setup_logging, set_verbose_mode, set_quiet_mode
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = {}
@@ -224,6 +225,9 @@ def parse_date(date_str: str) -> str:
 
 
 def main():
+    # Setup centralized logging (easy control!)
+    setup_logging(level='INFO')  # Default INFO level for all components
+
     parser = argparse.ArgumentParser(
         description="Stock Analysis Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -254,8 +258,16 @@ def main():
                        help='Price column to plot (default: Close)')
     parser.add_argument('--save', help='Save plot to file (e.g., plot.png)')
     parser.add_argument('--title', help='Custom plot title')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging (DEBUG level)')
+    parser.add_argument('--quiet', '-q', action='store_true', help='Quiet logging (WARNING+ only)')
 
     args = parser.parse_args()
+
+    # Handle logging level arguments
+    if args.verbose:
+        set_verbose_mode()
+    elif args.quiet:
+        set_quiet_mode()
 
     func = REGISTRY.get(args.function, None)
     # Handle function calls
@@ -276,7 +288,7 @@ def main():
                       for symbol in args.symbols]
 
             func(
-                configs=configs,
+                stocks=configs,
                 start_date=args.start,
                 end_date=args.end,
                 show_volume=args.volume,

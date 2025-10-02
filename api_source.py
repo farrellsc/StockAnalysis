@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from typing import Optional, List
 from abc import ABC, abstractmethod
+import logging
 
 
 class QuotaManager:
@@ -12,15 +13,29 @@ class QuotaManager:
     Manages hourly API quotas with persistent tracking.
     """
 
-    def __init__(self, quota_file: str = "data/.quota_tracker.json"):
+    def __init__(self, quota_file: str = "data/.quota_tracker.json", log_level: str = 'INFO'):
         """
         Initialize quota manager.
 
         Args:
             quota_file (str): Path to quota tracking file
+            log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
         """
         self.quota_file = quota_file
+
+        # Set up logging
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger.setLevel(getattr(logging, log_level.upper()))
+
+        # Create handler if none exists
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+
         self._ensure_quota_dir()
+        self.logger.debug(f"QuotaManager initialized with quota file: {quota_file}")
 
     def _ensure_quota_dir(self):
         """Ensure quota file directory exists."""
@@ -145,18 +160,32 @@ class ApiSource(ABC):
 class TiingoApiSource(ApiSource):
     """Tiingo API data source implementation with quota management."""
 
-    def __init__(self, api_key: Optional[str] = None, quota_limit: Optional[int] = None, **config):
+    def __init__(self, api_key: Optional[str] = None, quota_limit: Optional[int] = None, log_level: str = 'INFO', **config):
         """
         Initialize Tiingo data source.
 
         Args:
             api_key (str, optional): Tiingo API key
             quota_limit (int, optional): Hourly quota limit for Tiingo API
+            log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
             **config: Additional configuration options
         """
+        # Set up logging
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger.setLevel(getattr(logging, log_level.upper()))
+
+        # Create handler if none exists
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+
         self.api_key = self._get_api_key(api_key)
         self.base_url = config.get('base_url', 'https://api.tiingo.com/tiingo/daily')
         self.quota_limit = quota_limit
+
+        self.logger.info(f"TiingoApiSource initialized with quota_limit: {quota_limit}")
 
         # Initialize quota manager if quota limit is specified
         if quota_limit is not None:

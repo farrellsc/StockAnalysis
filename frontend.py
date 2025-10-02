@@ -6,24 +6,33 @@ from typing import List, Dict, Optional, Tuple
 import seaborn as sns
 from datetime import datetime
 import mplcursors
+import logging
+from logging_config import LoggingConfig
 
 
 class Frontend:
     """Frontend class for visualizing stock data using matplotlib."""
 
-    def __init__(self, style: str = 'seaborn-v0_8', figsize: Tuple[int, int] = (15, 10)):
+    def __init__(self, style: str = 'seaborn-v0_8', figsize: Tuple[int, int] = (15, 10), log_level: str = 'INFO'):
         """
         Initialize the Frontend with visualization settings.
 
         Args:
             style (str): Matplotlib style to use. Options: 'seaborn-v0_8', 'ggplot', 'dark_background', etc.
             figsize (tuple): Default figure size (width, height) in inches.
+            log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
         """
+        # Set up logging using centralized config
+        self.logger = LoggingConfig.get_logger('frontend')
+        if log_level:
+            LoggingConfig.set_level_for_component('frontend', log_level)
+
         # Set matplotlib style
         try:
             plt.style.use(style)
+            self.logger.debug(f"Successfully set matplotlib style: {style}")
         except:
-            print(f"⚠️  Style '{style}' not available, using default")
+            self.logger.warning(f"Style '{style}' not available, using default")
             plt.style.use('default')
 
         self.default_figsize = figsize
@@ -32,7 +41,7 @@ class Frontend:
         # Set up seaborn for better aesthetics
         sns.set_palette("husl")
 
-        print(f"✓ Frontend initialized with style: {style}")
+        self.logger.info(f"Frontend initialized with style: {style}, figsize: {figsize}")
 
     def create_figure(self, show_volume: bool = True, figsize: Tuple[int, int] = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]:
         """
@@ -101,10 +110,15 @@ class Frontend:
         """
         # Input validation
         if dataframes is None or not symbols:
+            self.logger.error("Dataframes and symbols lists cannot be empty")
             raise ValueError("Dataframes and symbols lists cannot be empty")
 
         if len(dataframes) != len(symbols):
+            self.logger.error(f"Number of dataframes ({len(dataframes)}) must match number of symbols ({len(symbols)})")
             raise ValueError("Number of dataframes must match number of symbols")
+
+        self.logger.info(f"Creating price comparison plot for {len(symbols)} symbols: {symbols}")
+        self.logger.debug(f"Plot parameters - column: {price_column}, show_volume: {show_volume}, title: {title}")
 
 
         if price_column not in dataframes[0].columns:
@@ -295,7 +309,7 @@ class Frontend:
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight',
                         facecolor='white', edgecolor='none')
-            print(f"✓ Plot saved to: {save_path}")
+            self.logger.info(f"Plot saved to: {save_path}")
 
         # Add interactive hover functionality
         self._add_hover_functionality(ax_price, all_data, all_symbols)
@@ -310,9 +324,9 @@ class Frontend:
         total_symbols = len(symbols)
         if secondary_symbols:
             total_symbols += len(secondary_symbols)
-            print(f"✓ Successfully created comparison chart for {len(symbols)} primary and {len(secondary_symbols)} secondary symbols")
+            self.logger.info(f"Successfully created comparison chart for {len(symbols)} primary and {len(secondary_symbols)} secondary symbols")
         else:
-            print(f"✓ Successfully created comparison chart for {len(symbols)} symbols")
+            self.logger.info(f"Successfully created comparison chart for {len(symbols)} symbols")
         print("💡 Hover over the lines to see detailed information")
         print("💡 Use plt.show() to display the plot when ready")
 

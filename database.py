@@ -5,6 +5,8 @@ import os
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
 from pathlib import Path
+import logging
+from logging_config import LoggingConfig
 
 
 class Database:
@@ -15,12 +17,13 @@ class Database:
     stock data stored in the format created by the Crawler class.
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, log_level: str = 'INFO'):
         """
         Initialize the Database with a pickled DataFrame file.
 
         Args:
             file_path (str): Path to the pickled DataFrame file
+            log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
 
         Raises:
             FileNotFoundError: If the file doesn't exist
@@ -30,14 +33,20 @@ class Database:
         self._df = None
         self._last_modified = None
 
+        # Set up logging using centralized config
+        self.logger = LoggingConfig.get_logger('database')
+        if log_level:
+            LoggingConfig.set_level_for_component('database', log_level)
+
         if not self.file_path.exists():
+            self.logger.error(f"Database file not found: {file_path}")
             raise FileNotFoundError(f"Database file not found: {file_path}")
 
         # Load the data and validate format
         self._load_data()
         self._validate_format()
 
-        print(f"✓ Database initialized: {len(self._df)} rows from {self.file_path}")
+        self.logger.info(f"Database initialized: {len(self._df)} rows from {self.file_path}")
 
     def _load_data(self) -> None:
         """Load data from the pickle file with caching based on file modification time."""
@@ -46,11 +55,13 @@ class Database:
         # Only reload if file has been modified
         if self._last_modified != current_modified:
             try:
+                self.logger.debug(f"Loading data from {self.file_path}")
                 with open(self.file_path, 'rb') as f:
                     self._df = pickle.load(f)
                 self._last_modified = current_modified
-                print(f"📂 Data loaded: {len(self._df)} rows")
+                self.logger.info(f"Data loaded: {len(self._df)} rows")
             except Exception as e:
+                self.logger.error(f"Failed to load database file: {e}")
                 raise Exception(f"Failed to load database file: {e}")
 
     def _validate_format(self) -> None:
