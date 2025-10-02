@@ -1,6 +1,5 @@
 
 import argparse
-from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from datetime import datetime
 import inspect
@@ -8,14 +7,12 @@ import json
 import pandas as pd
 import os
 
-from pandas import DataFrame
-
 from database import Database
 from frontend import Frontend
 from backend import Backend
-from cert import TiingoKey
-from mock_trade import MockTrade, Trade
-from typing import Dict, List, Optional
+from mock_trade import MockTrade
+from typing import List
+from structs import StockConfig, MacroConfig, Trade
 from logging_config import setup_logging, set_verbose_mode, set_quiet_mode
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,20 +24,6 @@ def register(f):
         f(*args, **kwargs)
     REGISTRY[f.__name__] = f
     return wrapper
-
-
-@dataclass
-class StockConfig:
-    symbol: str
-    normalize: bool = False
-    data: Optional[DataFrame] = None
-
-
-@dataclass
-class MacroConfig:
-    interest_rate: bool = False
-    cpi: bool = False
-    unemployment_rate: bool = False
 
 
 @register
@@ -81,19 +64,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
             start_date=start_date,
             end_date=end_date
         )
-        portfolio_df = mock_trader.mock()
-
-        # Create portfolio config from MockTrade results
-        final_portfolio_df = pd.DataFrame({
-            'Close': portfolio_df['portfolio_value'],
-            'Open': portfolio_df['portfolio_value'],
-            'High': portfolio_df['portfolio_value'],
-            'Low': portfolio_df['portfolio_value']
-        }, index=portfolio_df.index)
-        final_portfolio_df['symbol'] = 'Portfolio'
-
-        portfolio_config = StockConfig(symbol='Portfolio', data=final_portfolio_df, normalize=True)
-        portfolio_configs.append(portfolio_config)
+        portfolio_config = mock_trader.mock(as_stock_config=True)
 
     all_configs = stocks + portfolio_configs
 

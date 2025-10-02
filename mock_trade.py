@@ -3,13 +3,7 @@ from typing import List, Dict, Optional
 from backend import Backend
 from pandas import DataFrame
 import pandas as pd
-
-
-@dataclass
-class Trade:
-    symbol: str
-    volume: int  # amount of stocks to buy (positive) / sell (negative)
-    date: str  # datetime to perform the trade, e.g. '2025-01-01'
+from structs import Trade
 
 
 @dataclass
@@ -18,6 +12,7 @@ class MockTrade:
     trade_history: List[Trade]
     start_date: str
     end_date: str
+    name: str = "Portfolio"
 
     def __post_init__(self):
         self.symbol_data: Dict[str, DataFrame] = {}
@@ -28,7 +23,7 @@ class MockTrade:
         self.initial_investment: float = 0.0
         self._cached_trade_dates: Dict[int, pd.Timestamp] = {}  # Cache adjusted trade dates
 
-    def mock(self) -> DataFrame:
+    def mock(self, as_stock_config: bool = True) -> DataFrame:
         """Execute the mock trading simulation and return portfolio performance."""
         self.initialize_mock()
 
@@ -37,7 +32,17 @@ class MockTrade:
             self.trade_one()
             self.current_trade_index += 1
 
-        return self.portfolio_df
+        if as_stock_config:
+            final_portfolio_df = pd.DataFrame({
+                'Close': self.portfolio_df['portfolio_value'],
+                'Open': self.portfolio_df['portfolio_value'],
+                'High': self.portfolio_df['portfolio_value'],
+                'Low': self.portfolio_df['portfolio_value']
+            }, index=self.portfolio_df.index)
+            final_portfolio_df['symbol'] = self.name
+            portfolio_config = StockConfig(symbol=self.name, data=final_portfolio_df)
+        else:
+            return self.portfolio_df
 
     def initialize_mock(self):
         """
