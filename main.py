@@ -10,10 +10,10 @@ from backend import Backend
 from mock_trade import MockTrade
 from typing import Dict, List
 from utils import INF
-from structs import StockConfig, MacroConfig, Trade, Portfolio
+from structs import StockConfig, MacroConfig, Trade, MockPortfolio, Portfolio, BASE_DIR, DATA_DIR
 from logging_config import setup_logging, set_verbose_mode, set_quiet_mode
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 REGISTRY = {}
 
 
@@ -26,7 +26,7 @@ def register(f):
 
 @register
 def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
-                         portfolios: List[Portfolio] = [],
+                         portfolios: List[MockPortfolio] = [],
                          environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
@@ -36,7 +36,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     """
     # Initialize backend and frontend
     frontend = Frontend()
-    backend = Backend(database=Database(file_path=os.path.join(BASE_DIR, "data", "stock_data.pkl")))
+    backend = Backend(database=Database(file_path=os.path.join(DATA_DIR, "stock_data.pkl")))
 
     # Fetch data for stocks
     for config in stocks:
@@ -133,7 +133,7 @@ def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
         dict: Symbol -> volume mapping with actual share quantities
     """
     # Initialize backend to get stock prices
-    backend = Backend(database=Database(file_path=os.path.join(BASE_DIR, "data", "stock_data.pkl")))
+    backend = Backend(database=Database(file_path=os.path.join(DATA_DIR, "stock_data.pkl")))
 
     # Round date to next business day if needed
     target_date = pd.to_datetime(ds)
