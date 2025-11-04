@@ -8,6 +8,7 @@ from database import Database
 from frontend import Frontend
 from backend import Backend
 from mock_trade import MockTrade
+from crawler import Crawler
 from typing import Dict, List
 from utils import INF
 from structs import StockConfig, MacroConfig, Trade, MockPortfolio, Portfolio, BASE_DIR, DATA_DIR
@@ -166,8 +167,29 @@ def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
                 print(f"{symbol}: {volume} shares @ ${stock_price:.2f} = ${actual_cost:.2f} "
                       f"({symbol_perc:.1%} allocation)")
             else:
-                print(f"{symbol}: No price data available for {ds}")
-                recipe[symbol] = 0
+                print(f"{symbol}: No price data available for {ds}, using crawler to fetch data...")
+                try:
+                    crawler = Crawler()
+                    crawler.crawl_single(symbol, ds, ds)
+
+                    backend.database.refresh()
+                    price_data = backend.get_daily_price(symbol, ds, ds)
+
+                    if price_data is not None and len(price_data) > 0:
+                        stock_price = price_data['Close'].iloc[0]
+                        volume = int(allocation_amount / stock_price)
+                        actual_cost = volume * stock_price
+
+                        recipe[symbol] = volume
+
+                        print(f"{symbol}: {volume} shares @ ${stock_price:.2f} = ${actual_cost:.2f} "
+                              f"({symbol_perc:.1%} allocation) [fetched via crawler]")
+                    else:
+                        print(f"{symbol}: Failed to fetch price data even with crawler")
+                        recipe[symbol] = 0
+                except Exception as crawler_error:
+                    print(f"{symbol}: Crawler failed - {crawler_error}")
+                    recipe[symbol] = 0
 
         except Exception as e:
             print(f"{symbol}: Error getting price data - {e}")
