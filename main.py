@@ -219,14 +219,18 @@ def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
 
 
 @register
-def refresh_portfolio_data():
+def refresh_portfolio_data(portfolio_name: str = None):
     """
-    Read all stock symbols from portfolio JSON files and update the database
+    Read stock symbols from portfolio JSON files and update the database
     with data up to today's date.
+
+    Args:
+        portfolio_name: If specified, only refresh data for this portfolio file.
+                       If None, refresh all portfolios.
     """
     import glob
     import json
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     # Initialize components
     backend = Backend(database=Database(file_path=os.path.join(DATA_DIR, "stock_data.pkl")))
@@ -234,21 +238,32 @@ def refresh_portfolio_data():
     print("🔄 Refreshing portfolio data...")
     print("=" * 50)
 
-    # Find all portfolio JSON files
-    portfolio_files = glob.glob(os.path.join(DATA_DIR, "portfolios", "*.json"))
+    # Find portfolio JSON files
+    if portfolio_name:
+        # Refresh specific portfolio only
+        portfolio_file_path = os.path.join(DATA_DIR, "portfolios", f"{portfolio_name}.json")
+        if os.path.exists(portfolio_file_path):
+            portfolio_files = [portfolio_file_path]
+            print(f"📁 Refreshing specific portfolio: {portfolio_name}")
+        else:
+            print(f"❌ Portfolio file not found: {portfolio_name}.json")
+            return
+    else:
+        # Find all portfolio JSON files
+        portfolio_files = glob.glob(os.path.join(DATA_DIR, "portfolios", "*.json"))
 
-    if not portfolio_files:
-        print("❌ No portfolio files found in", os.path.join(DATA_DIR, "portfolios"))
-        return
+        if not portfolio_files:
+            print("❌ No portfolio files found in", os.path.join(DATA_DIR, "portfolios"))
+            return
 
-    print(f"📁 Found {len(portfolio_files)} portfolio file(s)")
+        print(f"📁 Found {len(portfolio_files)} portfolio file(s)")
 
     # Extract all unique symbols from portfolios
     all_symbols = set()
 
     for portfolio_file in portfolio_files:
-        portfolio_name = os.path.basename(portfolio_file).replace('.json', '')
-        print(f"📄 Processing portfolio: {portfolio_name}")
+        current_portfolio_name = os.path.basename(portfolio_file).replace('.json', '')
+        print(f"📄 Processing portfolio: {current_portfolio_name}")
 
         try:
             with open(portfolio_file, 'r') as f:
@@ -296,6 +311,15 @@ def refresh_portfolio_data():
 
     # Determine date range for updates
     today = datetime.now().strftime("%Y-%m-%d")
+    print(f"📅 Target end date: {today}")
+
+    # Check if today is a weekend and adjust if needed
+    today_dt = datetime.now()
+    if today_dt.weekday() >= 5:  # Saturday=5, Sunday=6
+        days_back = today_dt.weekday() - 4  # Go back to Friday
+        adjusted_date = today_dt - timedelta(days=days_back)
+        today = adjusted_date.strftime("%Y-%m-%d")
+        print(f"📅 Adjusted weekend date to: {today}")
 
     # Check existing data for all symbols
     print(f"\n📊 Checking database for existing data...")

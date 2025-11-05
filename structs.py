@@ -38,15 +38,231 @@ class MockPortfolio:
 
 
 @dataclass
+class Position:
+    """Represents a portfolio position with all holdings and metrics"""
+    holdings: Dict[str, Dict]  # symbol -> holding details
+    cash: float
+    total_invested: float
+    total_divested: float
+    total_portfolio_value: float
+    total_value: float  # cash + portfolio value
+    total_unrealized_pnl: float
+    total_return_rate: float
+    cumulative_invested: float
+    total_trades: int
+    summary: str
+
+    def merge(self, other: 'Position', name: str = "Combined") -> 'Position':
+        """
+        Merge this position with another position to create a combined overview.
+
+        Args:
+            other: Another Position object to merge with
+            name: Name for the combined position summary
+
+        Returns:
+            New Position object with combined metrics
+        """
+        # Merge holdings - combine holdings with same symbol
+        merged_holdings = {}
+
+        # Add holdings from self
+        for symbol, holding in self.holdings.items():
+            merged_holdings[symbol] = holding.copy()
+
+        # Add or merge holdings from other
+        for symbol, holding in other.holdings.items():
+            if symbol in merged_holdings:
+                # Combine holdings for the same symbol
+                existing = merged_holdings[symbol]
+                merged_holdings[symbol] = {
+                    'net_amount': existing.get('net_amount', 0) + holding.get('net_amount', 0),
+                    'total_invested': existing.get('total_invested', 0) + holding.get('total_invested', 0),
+                    'actual_shares': existing.get('actual_shares', 0) + holding.get('actual_shares', 0),
+                    'current_value': existing.get('current_value', 0) + holding.get('current_value', 0),
+                    'unrealized_pnl': (existing.get('unrealized_pnl') or 0) + (holding.get('unrealized_pnl') or 0),
+                    'trades_count': existing.get('trades_count', 0) + holding.get('trades_count', 0),
+                    'cash_percentage': 0,  # Will be recalculated if needed
+                    # Use the first available price data
+                    'avg_price': existing.get('avg_price') or holding.get('avg_price'),
+                    'current_price': existing.get('current_price') or holding.get('current_price'),
+                    'price_change_ratio': existing.get('price_change_ratio') or holding.get('price_change_ratio'),
+                    'portfolio_portion': 0  # Will be recalculated
+                }
+            else:
+                merged_holdings[symbol] = holding.copy()
+
+        # Combine financial metrics
+        combined_cash = self.cash + other.cash
+        combined_total_invested = self.total_invested + other.total_invested
+        combined_total_divested = self.total_divested + other.total_divested
+        combined_total_portfolio_value = self.total_portfolio_value + other.total_portfolio_value
+        combined_total_value = self.total_value + other.total_value
+        combined_total_unrealized_pnl = self.total_unrealized_pnl + other.total_unrealized_pnl
+        combined_cumulative_invested = self.cumulative_invested + other.cumulative_invested
+        combined_total_trades = self.total_trades + other.total_trades
+
+        # Calculate combined return rate
+        combined_total_return_rate = 0
+        if combined_total_invested > 0:
+            combined_total_return_rate = combined_total_unrealized_pnl / combined_total_invested
+
+        # Recalculate portfolio portions for merged holdings
+        if combined_total_portfolio_value > 0:
+            for symbol, holding in merged_holdings.items():
+                current_value = holding.get('current_value', 0)
+                holding['portfolio_portion'] = current_value / combined_total_portfolio_value
+        else:
+            # If no portfolio value, set all portions to 0
+            for symbol, holding in merged_holdings.items():
+                holding['portfolio_portion'] = 0
+
+        # Create combined summary
+        holdings_count = len([h for h in merged_holdings.values() if h.get('net_amount', 0) > 0])
+        combined_summary = f"{name}: ${combined_cash:,.2f} cash, {holdings_count} positions, ${combined_total_portfolio_value:,.2f} invested"
+
+        return Position(
+            holdings=merged_holdings,
+            cash=combined_cash,
+            total_invested=combined_total_invested,
+            total_divested=combined_total_divested,
+            total_portfolio_value=combined_total_portfolio_value,
+            total_value=combined_total_value,
+            total_unrealized_pnl=combined_total_unrealized_pnl,
+            total_return_rate=combined_total_return_rate,
+            cumulative_invested=combined_cumulative_invested,
+            total_trades=combined_total_trades,
+            summary=combined_summary
+        )
+
+    def pretty_print(self, name: str = "Position", original_cash: float = None):
+        """Print position data in a pretty format."""
+        print(f"\n📊 {name}")
+        print("=" * 100)
+
+        # Cash position
+        print(f"💰 Cash Available: ${self.cash:,.2f}")
+
+        # Holdings with detailed metrics
+        if self.holdings:
+            print(f"\n📈 Current Positions:")
+            print("-" * 120)
+            print(f"{'Symbol':<8} {'Shares':<10} {'Invested':<12} {'Avg Price':<10} {'Curr Price':<10} {'Change':<8} {'Curr Value':<12} {'P&L':<12} {'Portion':<8} {'Cash %':<8}")
+            print("-" * 128)
+
+            total_pnl = 0
+            for symbol, holding in self.holdings.items():
+                actual_shares = holding.get('actual_shares', 0)
+                invested = holding['total_invested']
+                avg_price = holding['avg_price']
+                current_price = holding['current_price']
+                price_change = holding['price_change_ratio']
+                current_value = holding['current_value']
+                unrealized_pnl = holding['unrealized_pnl']
+                portion = holding.get('portfolio_portion', 0)
+                cash_percentage = holding.get('cash_percentage', 0)
+
+                # Format values
+                shares_str = f"{actual_shares:,.0f}" if actual_shares > 0 else "-"
+                invested_str = f"${invested:,.0f}" if invested > 0 else "-"
+                avg_price_str = f"${avg_price:.2f}" if avg_price else "-"
+                curr_price_str = f"${current_price:.2f}" if current_price else "-"
+                change_str = f"{price_change:+.1%}" if price_change is not None else "-"
+                curr_value_str = f"${current_value:,.0f}" if current_value > 0 else "-"
+                pnl_str = f"${unrealized_pnl:+,.0f}" if unrealized_pnl is not None else "-"
+                portion_str = f"{portion:.1%}" if portion > 0 else "-"
+                cash_pct_str = f"{cash_percentage:.1%}" if cash_percentage > 0 else "-"
+
+                # Color coding for P&L (simplified text indicators)
+                if unrealized_pnl is not None:
+                    if unrealized_pnl > 0:
+                        pnl_str = f"+${unrealized_pnl:,.0f} ✓"
+                        total_pnl += unrealized_pnl
+                    elif unrealized_pnl < 0:
+                        pnl_str = f"-${abs(unrealized_pnl):,.0f} ✗"
+                        total_pnl += unrealized_pnl
+                    else:
+                        pnl_str = "$0 ="
+
+                print(f"{symbol:<8} {shares_str:<10} {invested_str:<12} {avg_price_str:<10} {curr_price_str:<10} {change_str:<8} {curr_value_str:<12} {pnl_str:<12} {portion_str:<8} {cash_pct_str:<8}")
+
+            # Add TOTAL row as part of the holdings table
+            print("-" * 128)
+
+            # Summary totals
+            total_shares = sum(holding.get('actual_shares', 0) for holding in self.holdings.values())
+
+            # Format TOTAL row values
+            total_shares_str = f"{total_shares:,.0f}" if total_shares > 0 else "-"
+            total_invested_str = f"${self.total_invested:,.0f}" if self.total_invested > 0 else "-"
+            total_curr_value_str = f"${self.total_portfolio_value:,.0f}" if self.total_portfolio_value > 0 else "-"
+
+            # Format total P&L
+            if total_pnl != 0:
+                pnl_indicator = "✓" if total_pnl > 0 else "✗"
+                total_pnl_str = f"${total_pnl:+,.0f} {pnl_indicator}"
+            else:
+                total_pnl_str = "$0 ="
+
+            # Calculate total cash percentage used
+            if original_cash and original_cash > 0 and self.total_invested > 0:
+                total_cash_pct = self.total_invested / original_cash
+                total_cash_pct_str = f"{total_cash_pct:.1%}"
+            else:
+                total_cash_pct_str = "-"
+
+            print(f"{'TOTAL':<8} {total_shares_str:<10} {total_invested_str:<12} {'-':<10} {'-':<10} {'-':<8} {total_curr_value_str:<12} {total_pnl_str:<12} {'100.0%':<8} {total_cash_pct_str:<8}")
+            print("-" * 128)
+
+        else:
+            print(f"\n📈 Current Positions: None")
+
+        # Total Investment Metrics Section
+        print(f"\n📊 Total Investment Metrics:")
+        print("-" * 50)
+
+        print(f"  💰 Total Cash Available:     ${self.cash:>12,.2f}")
+        print(f"  📈 Current Invested Amount:  ${self.total_invested:>12,.2f}")
+        print(f"  📉 Total Divested Amount:    ${self.total_divested:>12,.2f}")
+        print(f"  💎 Current Portfolio Value:  ${self.total_portfolio_value:>12,.2f}")
+        print(f"  🏦 Total Portfolio + Cash:   ${self.total_value:>12,.2f}")
+        print(f"  📊 Cumulative Invested:      ${self.cumulative_invested:>12,.2f}")
+        print("-" * 50)
+
+        # Performance metrics
+        pnl_indicator = "✓" if self.total_unrealized_pnl > 0 else "✗" if self.total_unrealized_pnl < 0 else "="
+        return_indicator = "✓" if self.total_return_rate > 0 else "✗" if self.total_return_rate < 0 else "="
+
+        print(f"  💹 Total Unrealized P&L:     ${self.total_unrealized_pnl:>+12,.2f} {pnl_indicator}")
+        print(f"  📋 Total Return Rate:        {self.total_return_rate:>+12.2%} {return_indicator}")
+        print(f"  🔄 Total Trades Executed:    {self.total_trades:>16,d}")
+
+        if self.total_invested > 0:
+            investment_efficiency = (self.total_portfolio_value / self.total_invested - 1) * 100
+            efficiency_indicator = "✓" if investment_efficiency > 0 else "✗" if investment_efficiency < 0 else "="
+            print(f"  ⚡ Investment Efficiency:     {investment_efficiency:>+12.1f}% {efficiency_indicator}")
+
+        print("=" * 100)
+
+
+@dataclass
 class Portfolio:
     name: str
     cash: float
     percent: float
     portfolio: Dict[str, float]  # symbol -> allocation percentage
     records: List[Dict]  # list of timestamped holdings
+    currency: str = "USD"  # Portfolio currency (USD, CNY, etc.)
+    _conversion_skipped: bool = False  # Internal flag to control conversion
 
     def __post_init__(self):
-        """Validate that all timestamps in records are business days"""
+        """Validate that all timestamps in records are business days and convert Chinese portfolio amounts"""
+        # Currency conversion for Chinese portfolios (unless skipped)
+        if not self._conversion_skipped:
+            if self.currency == "CNY" and self._is_chinese_portfolio():
+                self._convert_chinese_amounts_to_usd()
+
+        # Validate business days
         for record in self.records:
             if "time" in record:
                 try:
@@ -55,6 +271,101 @@ class Portfolio:
                     assert timestamp.weekday() < 5, f"Timestamp {record['time']} is not a business day (weekday: {timestamp.weekday()})"
                 except ValueError as e:
                     raise ValueError(f"Invalid timestamp format in record: {record['time']}. Expected format: YYYY-MM-DD HH:MM:SS") from e
+
+    def _is_chinese_portfolio(self) -> bool:
+        """Check if this is a Chinese portfolio based on symbols in portfolio allocation or records"""
+        # Check portfolio allocation symbols
+        for symbol in self.portfolio.keys():
+            if symbol.startswith('SH') or symbol.startswith('SZ'):
+                return True
+
+        # Check symbols in trade records
+        for record in self.records:
+            for key in record.keys():
+                if key != "time" and (key.startswith('SH') or key.startswith('SZ')):
+                    return True
+
+        return False
+
+    def _get_cny_to_usd_rate(self, date: str = None) -> float:
+        """Get CNY to USD exchange rate for a specific date. Falls back to approximate rate if no data."""
+        # Approximate CNY/USD rate (you might want to fetch real-time or historical data)
+        # As of recent years, roughly 1 USD = 7.0-7.3 CNY, so 1 CNY = ~0.14 USD
+
+        if date:
+            # Try to get historical rate for the specific date
+            # This is a simplified implementation - in production you'd want to fetch real rates
+            try:
+                # You could integrate with forex APIs here
+                # For now, use approximate historical rates
+                date_obj = datetime.strptime(date, "%Y-%m-%d")
+                year = date_obj.year
+
+                # Approximate historical rates
+                if year >= 2024:
+                    return 0.138  # ~1/7.25
+                elif year >= 2022:
+                    return 0.148  # ~1/6.75
+                elif year >= 2020:
+                    return 0.143  # ~1/7.0
+                else:
+                    return 0.145  # ~1/6.9
+            except:
+                pass
+
+        # Default current approximate rate
+        return 0.138  # ~1/7.25 USD per CNY
+
+    def _convert_chinese_amounts_to_usd(self):
+        """Convert Chinese portfolio cash and trade amounts from CNY to USD"""
+        if self.currency == "CNY":
+            # Convert cash amount using current rate
+            current_rate = self._get_cny_to_usd_rate()
+            original_cash = self.cash
+            self.cash = self.cash * current_rate
+
+            print(f"🔄 Converting Chinese portfolio '{self.name}' from CNY to USD:")
+            print(f"   Cash: ¥{original_cash:,.2f} → ${self.cash:,.2f} (rate: {current_rate:.4f})")
+
+            # Convert trade record amounts using historical rates
+            converted_records = 0
+            for record in self.records:
+                if "time" in record:
+                    record_date = datetime.strptime(record["time"], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+                    rate = self._get_cny_to_usd_rate(record_date)
+
+                    for symbol, amount in record.items():
+                        if symbol != "time" and isinstance(amount, (int, float)):
+                            original_amount = amount
+                            record[symbol] = amount * rate
+                            converted_records += 1
+
+            print(f"   Converted {converted_records} trade record amounts using historical rates")
+
+            # Update currency designation
+            self.currency = "USD"
+
+    def convert_currency(self, target_currency: str):
+        """
+        Manually convert portfolio to target currency.
+
+        Args:
+            target_currency: Target currency code (e.g., "USD")
+        """
+        if target_currency == "USD" and self.currency == "CNY":
+            self._convert_chinese_amounts_to_usd()
+            self._conversion_skipped = False
+            print(f"✅ Portfolio converted from CNY to USD")
+        elif target_currency == self.currency:
+            print(f"Portfolio is already in {self.currency}, no conversion needed")
+        else:
+            supported_conversions = "CNY -> USD"
+            raise ValueError(f"Unsupported currency conversion: {self.currency} -> {target_currency}. "
+                           f"Currently supported: {supported_conversions}")
+
+    def convert_to_usd(self):
+        """Convenience method to convert to USD (backward compatibility)"""
+        self.convert_currency("USD")
 
     @property
     def date(self) -> str:
@@ -71,23 +382,44 @@ class Portfolio:
         return self.portfolio
 
     @classmethod
-    def from_file(cls, filename: str):
+    def from_file(cls, filename: str, convert_currency: Optional[str] = None):
+        """
+        Load portfolio from file.
+
+        Args:
+            filename: Name of the portfolio file (without .json extension)
+            convert_currency: Target currency for conversion (e.g., "USD").
+                            If None, no conversion will be performed.
+                            Currently supports CNY to USD conversion only.
+        """
         content = json.load(open(PORTFOLIO_DIR + "/" + filename + ".json"))
 
-        return cls(
+        # Detect original currency from file or auto-detect
+        original_currency = content.get("currency", "USD")
+
+        # Determine if conversion should be skipped before creating instance
+        conversion_skipped = convert_currency is None
+
+        # Create portfolio instance with conversion flag set
+        portfolio = cls(
             name=filename,
             cash=content.get("cash", 0),
             percent=content.get("percent", 0),
             portfolio=content.get("portfolio", {}),
-            records=content.get("records", [])
+            records=content.get("records", []),
+            currency=original_currency,
+            _conversion_skipped=conversion_skipped,
         )
+
+        return portfolio
 
     def to_file(self):
         content = {
             "cash": self.cash,
             "percent": self.percent,
             "portfolio": self.portfolio,
-            "records": self.records
+            "records": self.records,
+            "currency": self.currency
         }
         json.dump(content, open(PORTFOLIO_DIR + "/" + self.name + ".json", "w"), indent=2)
 
@@ -102,7 +434,7 @@ class Portfolio:
         }
         self.records.append(record)
 
-    def get_current_position(self, backend=None, target_date: str = None, print_output: bool = True) -> Dict[str, Dict]:
+    def get_current_position(self, backend=None, target_date: str = None, print_output: bool = True) -> Position:
         """
         Get current position by accumulating all records chronologically.
 
@@ -112,21 +444,22 @@ class Portfolio:
             print_output (bool): Whether to print formatted output. Defaults to True.
 
         Returns:
-            Dict with structure:
-            {
-                'holdings': {symbol: position_details},
-                'cash': remaining_cash_amount,
-                'total_value': total_portfolio_value,
-                'summary': human-readable summary
-            }
+            Position object containing all portfolio holdings and metrics
         """
         if not self.records:
-            result = {
-                'holdings': {},
-                'cash': self.cash,
-                'total_value': self.cash,
-                'summary': f"Portfolio '{self.name}': ${self.cash:,.2f} cash, no holdings"
-            }
+            result = Position(
+                holdings={},
+                cash=self.cash,
+                total_invested=0,
+                total_divested=0,
+                total_portfolio_value=0,
+                total_value=self.cash,
+                total_unrealized_pnl=0,
+                total_return_rate=0,
+                cumulative_invested=0,
+                total_trades=0,
+                summary=f"Portfolio '{self.name}': ${self.cash:,.2f} cash, no holdings"
+            )
         else:
             # Initialize Backend if not provided
             if backend is None:
@@ -329,10 +662,18 @@ class Portfolio:
             # Calculate portfolio portions
             if total_portfolio_value > 0:
                 for symbol, holding in current_holdings.items():
-                    if holding['current_value'] > 0:
-                        holding['portfolio_portion'] = holding['current_value'] / total_portfolio_value
+                    # Use the same logic as total_portfolio_value calculation
+                    current_value = holding.get('current_value', 0)
+                    net_amount = holding.get('net_amount', 0)
+                    if net_amount > 0:
+                        value_for_portion = current_value if current_value > 0 else net_amount
+                        holding['portfolio_portion'] = value_for_portion / total_portfolio_value
                     else:
-                        holding['portfolio_portion'] = abs(holding['net_amount']) / total_portfolio_value
+                        holding['portfolio_portion'] = 0
+            else:
+                # If no portfolio value, set all portions to 0
+                for symbol, holding in current_holdings.items():
+                    holding['portfolio_portion'] = 0
 
             # Calculate remaining cash
             remaining_cash = self.cash + total_divested - total_invested
@@ -368,19 +709,19 @@ class Portfolio:
             else:
                 summary = f"Portfolio '{self.name}': ${remaining_cash:,.2f} cash, no positions"
 
-            result = {
-                'holdings': current_holdings,  # Detailed position information per symbol
-                'cash': remaining_cash,
-                'total_invested': total_invested,  # Total current long positions
-                'total_divested': total_divested,  # Total short positions
-                'total_portfolio_value': total_portfolio_value,  # Current portfolio value
-                'total_value': remaining_cash + total_portfolio_value,  # Cash + portfolio value
-                'total_unrealized_pnl': total_unrealized_pnl,  # Total unrealized profit/loss
-                'total_return_rate': total_return_rate,  # Overall return rate
-                'cumulative_invested': cumulative_invested,  # Total money put into market over time
-                'total_trades': total_trades,  # Total number of trades executed
-                'summary': summary
-            }
+            result = Position(
+                holdings=current_holdings,  # Detailed position information per symbol
+                cash=remaining_cash,
+                total_invested=total_invested,  # Total current long positions
+                total_divested=total_divested,  # Total short positions
+                total_portfolio_value=total_portfolio_value,  # Current portfolio value
+                total_value=remaining_cash + total_portfolio_value,  # Cash + portfolio value
+                total_unrealized_pnl=total_unrealized_pnl,  # Total unrealized profit/loss
+                total_return_rate=total_return_rate,  # Overall return rate
+                cumulative_invested=cumulative_invested,  # Total money put into market over time
+                total_trades=total_trades,  # Total number of trades executed
+                summary=summary
+            )
 
         # Print pretty formatted output if requested
         if print_output:
@@ -388,120 +729,10 @@ class Portfolio:
 
         return result
 
-    def _print_position(self, position_data: Dict):
-        """Print position data in a pretty format."""
-        print(f"\n📊 Portfolio Position: {self.name}")
-        print("=" * 100)
-
-        # Cash position
-        print(f"💰 Cash Available: ${position_data['cash']:,.2f}")
-
-        # Holdings with detailed metrics
-        if position_data['holdings']:
-            print(f"\n📈 Current Positions:")
-            print("-" * 120)
-            print(f"{'Symbol':<8} {'Shares':<10} {'Invested':<12} {'Avg Price':<10} {'Curr Price':<10} {'Change':<8} {'Curr Value':<12} {'P&L':<12} {'Portion':<8} {'Cash %':<8}")
-            print("-" * 128)
-
-            total_pnl = 0
-            for symbol, holding in position_data['holdings'].items():
-                actual_shares = holding.get('actual_shares', 0)
-                invested = holding['total_invested']
-                avg_price = holding['avg_price']
-                current_price = holding['current_price']
-                price_change = holding['price_change_ratio']
-                current_value = holding['current_value']
-                unrealized_pnl = holding['unrealized_pnl']
-                portion = holding.get('portfolio_portion', 0)
-                cash_percentage = holding.get('cash_percentage', 0)
-
-                # Format values
-                shares_str = f"{actual_shares:,.0f}" if actual_shares > 0 else "-"
-                invested_str = f"${invested:,.0f}" if invested > 0 else "-"
-                avg_price_str = f"${avg_price:.2f}" if avg_price else "-"
-                curr_price_str = f"${current_price:.2f}" if current_price else "-"
-                change_str = f"{price_change:+.1%}" if price_change is not None else "-"
-                curr_value_str = f"${current_value:,.0f}" if current_value > 0 else "-"
-                pnl_str = f"${unrealized_pnl:+,.0f}" if unrealized_pnl is not None else "-"
-                portion_str = f"{portion:.1%}" if portion > 0 else "-"
-                cash_pct_str = f"{cash_percentage:.1%}" if cash_percentage > 0 else "-"
-
-                # Color coding for P&L (simplified text indicators)
-                if unrealized_pnl is not None:
-                    if unrealized_pnl > 0:
-                        pnl_str = f"+${unrealized_pnl:,.0f} ✓"
-                        total_pnl += unrealized_pnl
-                    elif unrealized_pnl < 0:
-                        pnl_str = f"-${abs(unrealized_pnl):,.0f} ✗"
-                        total_pnl += unrealized_pnl
-                    else:
-                        pnl_str = "$0 ="
-
-                print(f"{symbol:<8} {shares_str:<10} {invested_str:<12} {avg_price_str:<10} {curr_price_str:<10} {change_str:<8} {curr_value_str:<12} {pnl_str:<12} {portion_str:<8} {cash_pct_str:<8}")
-
-            # Add TOTAL row as part of the holdings table
-            print("-" * 128)
-
-            # Summary totals
-            total_invested = position_data.get('total_invested', 0)
-            total_portfolio_value = position_data.get('total_portfolio_value', 0)
-            total_shares = sum(holding.get('actual_shares', 0) for holding in position_data['holdings'].values())
-
-            # Format TOTAL row values
-            total_shares_str = f"{total_shares:,.0f}" if total_shares > 0 else "-"
-            total_invested_str = f"${total_invested:,.0f}" if total_invested > 0 else "-"
-            total_curr_value_str = f"${total_portfolio_value:,.0f}" if total_portfolio_value > 0 else "-"
-
-            # Format total P&L
-            if total_pnl != 0:
-                pnl_indicator = "✓" if total_pnl > 0 else "✗"
-                total_pnl_str = f"${total_pnl:+,.0f} {pnl_indicator}"
-            else:
-                total_pnl_str = "$0 ="
-
-            # Calculate total cash percentage used
-            total_cash_pct = (total_invested / self.cash) if self.cash > 0 and total_invested > 0 else 0
-            total_cash_pct_str = f"{total_cash_pct:.1%}" if total_cash_pct > 0 else "-"
-
-            print(f"{'TOTAL':<8} {total_shares_str:<10} {total_invested_str:<12} {'-':<10} {'-':<10} {'-':<8} {total_curr_value_str:<12} {total_pnl_str:<12} {'100.0%':<8} {total_cash_pct_str:<8}")
-            print("-" * 128)
-
-        else:
-            print(f"\n📈 Current Positions: None")
-
-        # Total Investment Metrics Section
-        print(f"\n📊 Total Investment Metrics:")
-        print("-" * 50)
-
-        total_invested = position_data.get('total_invested', 0)
-        total_divested = position_data.get('total_divested', 0)
-        total_portfolio_value = position_data.get('total_portfolio_value', 0)
-        total_unrealized_pnl = position_data.get('total_unrealized_pnl', 0)
-        total_return_rate = position_data.get('total_return_rate', 0)
-        cumulative_invested = position_data.get('cumulative_invested', 0)
-        total_trades = position_data.get('total_trades', 0)
-        total_value = position_data.get('total_value', 0)
-
-        print(f"  💰 Total Cash Available:     ${position_data['cash']:>12,.2f}")
-        print(f"  📈 Current Invested Amount:  ${total_invested:>12,.2f}")
-        print(f"  📉 Total Divested Amount:    ${total_divested:>12,.2f}")
-        print(f"  💎 Current Portfolio Value:  ${total_portfolio_value:>12,.2f}")
-        print(f"  🏦 Total Portfolio + Cash:   ${total_value:>12,.2f}")
-        print(f"  📊 Cumulative Invested:      ${cumulative_invested:>12,.2f}")
-        print("-" * 50)
-
-        # Performance metrics
-        pnl_indicator = "✓" if total_unrealized_pnl > 0 else "✗" if total_unrealized_pnl < 0 else "="
-        return_indicator = "✓" if total_return_rate > 0 else "✗" if total_return_rate < 0 else "="
-
-        print(f"  💹 Total Unrealized P&L:     ${total_unrealized_pnl:>+12,.2f} {pnl_indicator}")
-        print(f"  📋 Total Return Rate:        {total_return_rate:>+12.2%} {return_indicator}")
-        print(f"  🔄 Total Trades Executed:    {total_trades:>16,d}")
-
-        if total_invested > 0:
-            investment_efficiency = (total_portfolio_value / total_invested - 1) * 100
-            efficiency_indicator = "✓" if investment_efficiency > 0 else "✗" if investment_efficiency < 0 else "="
-            print(f"  ⚡ Investment Efficiency:     {investment_efficiency:>+12.1f}% {efficiency_indicator}")
+    def pretty_print(self):
+        """Print portfolio-specific information."""
+        print(f"\n🎯 Portfolio Configuration: {self.name}")
+        print("=" * 60)
 
         # Portfolio allocation (from configuration)
         if self.portfolio:
@@ -513,15 +744,25 @@ class Portfolio:
         # Investment parameters
         print(f"\n⚙️  Investment Parameters:")
         print("-" * 30)
+        currency_symbol = "$" if self.currency == "USD" else "¥" if self.currency == "CNY" else self.currency
+        print(f"  Total Cash: {currency_symbol}{self.cash:>12,.2f} ({self.currency})")
         print(f"  Investment %: {self.percent:>6.1%}")
-        print(f"  Target Amount: ${self.cash * self.percent:>8,.2f}")
+        print(f"  Target Amount: {currency_symbol}{self.cash * self.percent:>8,.2f}")
 
         # Last update
         if self.records:
             latest_time = max(datetime.strptime(record["time"], "%Y-%m-%d %H:%M:%S") for record in self.records)
             print(f"\n🕒 Last Updated: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        print("=" * 100)
+        print("=" * 60)
+
+    def _print_position(self, position_data: Position):
+        """Print combined portfolio and position data."""
+        # Print position data
+        position_data.pretty_print(f"Portfolio Position: {self.name}", original_cash=self.cash)
+
+        # Print portfolio-specific configuration
+        self.pretty_print()
 
     def get_next_trade(self, backend=None, target_date: str = None, print_output: bool = True) -> Dict:
         """
@@ -550,8 +791,8 @@ class Portfolio:
         investment_amount = self.cash * self.percent
 
         # Get current holdings and their allocations
-        current_holdings = current_position.get('holdings', {})
-        total_portfolio_value = current_position.get('total_portfolio_value', 0)
+        current_holdings = current_position.holdings
+        total_portfolio_value = current_position.total_portfolio_value
 
         # Calculate current allocations as percentages
         current_allocations = {}
