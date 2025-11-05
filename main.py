@@ -218,6 +218,173 @@ def buy_recipe(capital: int, percent: float, distribution: dict, ds: str):
     return recipe
 
 
+@register
+def refresh_portfolio_data():
+    """
+    Read all stock symbols from portfolio JSON files and update the database
+    with data up to today's date.
+    """
+    import glob
+    import json
+    from datetime import datetime
+
+    # Initialize components
+    backend = Backend(database=Database(file_path=os.path.join(DATA_DIR, "stock_data.pkl")))
+
+    print("🔄 Refreshing portfolio data...")
+    print("=" * 50)
+
+    # Find all portfolio JSON files
+    portfolio_files = glob.glob(os.path.join(DATA_DIR, "portfolios", "*.json"))
+
+    if not portfolio_files:
+        print("❌ No portfolio files found in", os.path.join(DATA_DIR, "portfolios"))
+        return
+
+    print(f"📁 Found {len(portfolio_files)} portfolio file(s)")
+
+    # Extract all unique symbols from portfolios
+    all_symbols = set()
+
+    for portfolio_file in portfolio_files:
+        portfolio_name = os.path.basename(portfolio_file).replace('.json', '')
+        print(f"📄 Processing portfolio: {portfolio_name}")
+
+        try:
+            with open(portfolio_file, 'r') as f:
+                portfolio_data = json.load(f)
+
+            # Extract symbols from portfolio allocations
+            if 'portfolio' in portfolio_data:
+                for symbol in portfolio_data['portfolio'].keys():
+                    all_symbols.add(symbol.upper())
+
+            # Extract symbols from records
+            if 'records' in portfolio_data:
+                for record in portfolio_data['records']:
+                    for key in record.keys():
+                        if key != 'time':
+                            all_symbols.add(key.upper())
+
+            print(f"   ✓ Extracted symbols from {portfolio_name}")
+
+        except Exception as e:
+            print(f"   ❌ Error processing {portfolio_name}: {e}")
+            continue
+
+    if not all_symbols:
+        print("❌ No symbols found in portfolio files")
+        return
+
+    symbols_list = sorted(list(all_symbols))
+    print(f"\n🎯 Found {len(symbols_list)} unique symbols:")
+    print(f"   {', '.join(symbols_list)}")
+
+    # Separate symbols by market type
+    chinese_symbols = []
+    us_symbols = []
+
+    for symbol in symbols_list:
+        if symbol.startswith('SH') or symbol.startswith('SZ'):
+            chinese_symbols.append(symbol)
+        else:
+            us_symbols.append(symbol)
+
+    print(f"\n📊 Symbol breakdown:")
+    print(f"   Chinese stocks (SH/SZ): {len(chinese_symbols)} - {chinese_symbols}")
+    print(f"   US/Other stocks: {len(us_symbols)} - {us_symbols}")
+
+    # Determine date range for updates
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Check existing data for all symbols
+    print(f"\n📊 Checking database for existing data...")
+
+    chinese_symbols_to_update = []
+    us_symbols_to_update = []
+
+    for symbol in symbols_list:
+        try:
+            date_range = backend.database.get_date_range(symbol=symbol)
+            if date_range and date_range.get('end_date'):
+                last_date = date_range['end_date']
+                print(f"   {symbol}: Latest data until {last_date}")
+            else:
+                print(f"   {symbol}: No existing data - will fetch full history")
+
+            # Add to appropriate update list
+            if symbol.startswith('SH') or symbol.startswith('SZ'):
+                chinese_symbols_to_update.append(symbol)
+            else:
+                us_symbols_to_update.append(symbol)
+
+        except Exception as e:
+            print(f"   {symbol}: Error checking data - {e}")
+            if symbol.startswith('SH') or symbol.startswith('SZ'):
+                chinese_symbols_to_update.append(symbol)
+            else:
+                us_symbols_to_update.append(symbol)
+
+    if not chinese_symbols_to_update and not us_symbols_to_update:
+        print("✅ All symbols are up to date!")
+        return
+
+    # Calculate start date (use 30 days ago as fallback for new symbols)
+    from datetime import timedelta
+    fallback_start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    # Update Chinese stocks using AshareApiSource
+    if chinese_symbols_to_update:
+        print(f"\n🇨🇳 Updating {len(chinese_symbols_to_update)} Chinese stocks using AshareApiSource...")
+        try:
+            from api_source import AshareApiSource
+            chinese_crawler = Crawler(api_source=AshareApiSource())
+
+            result_path = chinese_crawler.crawl(
+                symbols=chinese_symbols_to_update,
+                start_date=fallback_start,
+                end_date=today,
+                force=False
+            )
+
+            print(f"✅ Chinese stocks updated successfully!")
+
+            # Show quota status
+            quota_status = chinese_crawler.get_quota_status()
+            if quota_status:
+                print(f"📈 Ashare API Quota Status: {quota_status}")
+
+        except Exception as e:
+            print(f"❌ Error updating Chinese stocks: {e}")
+
+    # Update US/Other stocks using TiingoApiSource (default)
+    if us_symbols_to_update:
+        print(f"\n🇺🇸 Updating {len(us_symbols_to_update)} US/Other stocks using TiingoApiSource...")
+        try:
+            from api_source import TiingoApiSource
+            us_crawler = Crawler(api_source=TiingoApiSource())
+
+            result_path = us_crawler.crawl(
+                symbols=us_symbols_to_update,
+                start_date=fallback_start,
+                end_date=today,
+                force=False
+            )
+
+            print(f"✅ US/Other stocks updated successfully!")
+
+            # Show quota status
+            quota_status = us_crawler.get_quota_status()
+            if quota_status:
+                print(f"📈 Tiingo API Quota Status: {quota_status}")
+
+        except Exception as e:
+            print(f"❌ Error updating US/Other stocks: {e}")
+
+    print(f"\n✅ Portfolio data refresh completed!")
+    print(f"📁 Updated data saved to database")
+
+
 def parse_date(date_str: str) -> str:
     """Parse and validate date string."""
     try:
