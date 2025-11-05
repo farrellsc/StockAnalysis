@@ -248,7 +248,6 @@ class Portfolio:
                             })
                             if trade_amount > 0:
                                 position_details[symbol]['total_invested'] += trade_amount
-            print(position_details['BRK-B'])
 
             # Calculate enhanced metrics for each position
             current_holdings = {}
@@ -271,7 +270,9 @@ class Portfolio:
                 # Get current price
                 current_price = None
                 current_value = 0
-                actual_shares = 0
+
+                # Always set actual_shares from details, regardless of price availability
+                actual_shares = details['total_shares']  # This already includes buys (+) and sells (-)
 
                 try:
                     price_data = backend.get_daily_price(symbol, target_date, target_date)
@@ -290,9 +291,6 @@ class Portfolio:
 
                     if price_data is not None and len(price_data) > 0:
                         current_price = price_data['Close'].iloc[0]
-
-                        # Calculate actual shares owned (net of all buys and sells)
-                        actual_shares = details['total_shares']  # This already includes buys (+) and sells (-)
                         current_value = actual_shares * current_price if actual_shares > 0 else 0
                 except Exception as e:
                     # Add some debugging info
@@ -461,7 +459,11 @@ class Portfolio:
             else:
                 total_pnl_str = "$0 ="
 
-            print(f"{'TOTAL':<8} {total_shares_str:<10} {total_invested_str:<12} {'-':<10} {'-':<10} {'-':<8} {total_curr_value_str:<12} {total_pnl_str:<12} {'100.0%':<8} {'-':<8}")
+            # Calculate total cash percentage used
+            total_cash_pct = (total_invested / self.cash) if self.cash > 0 and total_invested > 0 else 0
+            total_cash_pct_str = f"{total_cash_pct:.1%}" if total_cash_pct > 0 else "-"
+
+            print(f"{'TOTAL':<8} {total_shares_str:<10} {total_invested_str:<12} {'-':<10} {'-':<10} {'-':<8} {total_curr_value_str:<12} {total_pnl_str:<12} {'100.0%':<8} {total_cash_pct_str:<8}")
             print("-" * 128)
 
         else:

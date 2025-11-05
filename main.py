@@ -329,20 +329,35 @@ def refresh_portfolio_data():
         print("✅ All symbols are up to date!")
         return
 
-    # Calculate start date (use 30 days ago as fallback for new symbols)
-    from datetime import timedelta
-    fallback_start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-
     # Update Chinese stocks using AshareApiSource
     if chinese_symbols_to_update:
         print(f"\n🇨🇳 Updating {len(chinese_symbols_to_update)} Chinese stocks using AshareApiSource...")
+
+        # Calculate fallback start date as smallest existing date for Chinese symbols
+        chinese_fallback_start = None
+        for symbol in chinese_symbols_to_update:
+            try:
+                earliest_date = backend.database.get_earliest_date(symbol)
+                if earliest_date:
+                    if chinese_fallback_start is None or earliest_date < chinese_fallback_start:
+                        chinese_fallback_start = earliest_date
+            except Exception:
+                pass
+
+        # Use 30 days ago as fallback if no existing data found
+        if chinese_fallback_start is None:
+            from datetime import timedelta
+            chinese_fallback_start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        print(f"📅 Using start date: {chinese_fallback_start}")
+
         try:
             from api_source import AshareApiSource
             chinese_crawler = Crawler(api_source=AshareApiSource())
 
             result_path = chinese_crawler.crawl(
                 symbols=chinese_symbols_to_update,
-                start_date=fallback_start,
+                start_date=chinese_fallback_start,
                 end_date=today,
                 force=False
             )
@@ -360,15 +375,34 @@ def refresh_portfolio_data():
     # Update US/Other stocks using TiingoApiSource (default)
     if us_symbols_to_update:
         print(f"\n🇺🇸 Updating {len(us_symbols_to_update)} US/Other stocks using TiingoApiSource...")
+
+        # Calculate fallback start date as smallest existing date for US symbols
+        us_fallback_start = None
+        for symbol in us_symbols_to_update:
+            try:
+                earliest_date = backend.database.get_earliest_date(symbol)
+                if earliest_date:
+                    if us_fallback_start is None or earliest_date < us_fallback_start:
+                        us_fallback_start = earliest_date
+            except Exception:
+                pass
+
+        # Use 30 days ago as fallback if no existing data found
+        if us_fallback_start is None:
+            from datetime import timedelta
+            us_fallback_start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        print(f"📅 Using start date: {us_fallback_start}")
+
         try:
             from api_source import TiingoApiSource
             us_crawler = Crawler(api_source=TiingoApiSource())
 
             result_path = us_crawler.crawl(
                 symbols=us_symbols_to_update,
-                start_date=fallback_start,
+                start_date=us_fallback_start,
                 end_date=today,
-                force=False
+                force=True
             )
 
             print(f"✅ US/Other stocks updated successfully!")
