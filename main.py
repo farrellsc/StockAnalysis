@@ -31,7 +31,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
                          environments: MacroConfig = MacroConfig(),
                          show_volume: bool = False,
                          price_column: str = 'Close', save_path: str = None,
-                         title: str = None):
+                         title: str = None, benchmark: str = "SPY"):
     """
     An API to plot curves by reading the database with input symbols.
     """
@@ -64,6 +64,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
                 start_date=start_date,
                 end_date=end_date,
                 name=portfolio.name,
+                benchmark_symbol=benchmark,
             )
             portfolio_configs.append(mock_trader.mock(as_stock_config=True))
 

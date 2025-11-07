@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pandas import DataFrame
 import json
+from utils import INF
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import os
@@ -28,8 +29,93 @@ class MacroConfig:
 @dataclass
 class Trade:
     symbol: str
-    volume: int  # amount of stocks to buy (positive) / sell (negative)
     date: str  # datetime to perform the trade, e.g. '2025-01-01'
+    volume: Optional[int] = None  # amount of stocks to buy (positive) / sell (negative)
+    cash_amount: Optional[float] = None  # amount of cash to invest (positive) / divest (negative)
+    percentage: Optional[float] = None  # percentage of portfolio to invest (positive) / divest (negative)
+
+    def __post_init__(self):
+        """Validate input and convert cash_amount to volume if needed"""
+        # Validate date is a business day
+        trade_date = datetime.strptime(self.date, '%Y-%m-%d')
+        if trade_date.weekday() >= 5:  # Saturday=5, Sunday=6
+            raise ValueError(f"Trade date {self.date} is not a business day (weekday={trade_date.weekday()}). Please use a weekday (0-4).")
+
+        # Validate that only one of volume, cash_amount, or percentage is specified
+        specified_params = [self.volume is not None, self.cash_amount is not None, self.percentage is not None]
+        if sum(specified_params) > 1:
+            raise ValueError("Cannot specify more than one of volume, cash_amount, or percentage. Use only one.")
+
+        if sum(specified_params) == 0:
+            raise ValueError("Must specify one of: volume (number of shares), cash_amount (dollar amount), or percentage (% of portfolio).")
+
+        # If cash_amount is specified, we need to convert it to volume
+        # This requires price data, so we'll defer the conversion to when price is available
+        if self.cash_amount is not None:
+            self._original_cash_amount = self.cash_amount
+            # Volume will be calculated when convert_cash_to_volume() is called
+
+        # If percentage is specified, we need to convert it to volume
+        # This requires both price data and portfolio value, so we'll defer the conversion
+        if self.percentage is not None:
+            self._original_percentage = self.percentage
+            # Volume will be calculated when convert_percentage_to_volume() is called
+
+    def convert_cash_to_volume(self, price: float):
+        """Convert cash_amount to volume using the given price"""
+        import math
+
+        if self.cash_amount is not None and self.volume is None:
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} for converting cash to volume")
+
+            # Handle infinite cash amount
+            if math.isinf(self.cash_amount):
+                if self.cash_amount > 0:  # Positive infinity - buy all available
+                    self.volume = INF  # Large number to represent unlimited buying power
+                else:  # Negative infinity - sell all holdings
+                    self.volume = -INF  # Large negative number to represent unlimited selling
+            else:
+                # Calculate volume from cash amount
+                raw_volume = self.cash_amount / price
+
+                # Handle NaN values
+                if math.isnan(raw_volume):
+                    raise ValueError(f"Cannot calculate volume: cash_amount={self.cash_amount}, price={price}")
+
+                self.volume = int(raw_volume)  # Round down to whole shares
+
+            # Clear cash_amount since we now have volume
+            self.cash_amount = None
+
+    def convert_percentage_to_volume(self, price: float, portfolio_value: float):
+        """Convert percentage to volume using the given price and portfolio value"""
+        import math
+
+        if self.percentage is not None and self.volume is None:
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} for converting percentage to volume")
+
+            if portfolio_value <= 0:
+                raise ValueError(f"Invalid portfolio value {portfolio_value} for converting percentage to volume")
+
+            # Calculate cash amount from percentage
+            cash_amount = (self.percentage / 100.0) * portfolio_value
+
+            # Handle infinite percentage
+            if math.isinf(self.percentage):
+                if self.percentage > 0:  # Positive infinity
+                    self.volume = INF
+                else:  # Negative infinity
+                    self.volume = -INF
+            else:
+                # Calculate volume from cash amount
+                raw_volume = cash_amount / price
+
+                self.volume = int(raw_volume)  # Round down to whole shares
+
+            # Clear percentage since we now have volume
+            self.percentage = None
 
 @dataclass
 class MockPortfolio:

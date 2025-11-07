@@ -13,6 +13,7 @@ class MockTrade:
     start_date: str
     end_date: str
     name: str = "Portfolio"
+    benchmark_symbol: str = "SPY"
 
     def __post_init__(self):
         self.symbol_data: Dict[str, DataFrame] = {}
@@ -32,6 +33,19 @@ class MockTrade:
         while self.current_trade_index < len(self.trade_history):
             self.trade_one()
             self.current_trade_index += 1
+
+        # Show final portfolio state at end of simulation
+        end_date = pd.to_datetime(self.end_date)
+        if end_date.weekday() >= 5:  # Adjust to business day if needed
+            end_date = end_date - pd.Timedelta(days=end_date.weekday() - 4)
+
+        print(f"\n{'='*60}")
+        print(f"FINAL PORTFOLIO STATE - {end_date.strftime('%Y-%m-%d')}")
+        print(f"{'='*60}")
+        self._update_portfolio_values(end_date)
+
+        # Calculate and display average yearly return
+        self._calculate_yearly_return(end_date, self.benchmark_symbol)
 
         if as_stock_config:
             final_portfolio_df = pd.DataFrame({
@@ -54,6 +68,9 @@ class MockTrade:
         """
         # Get all unique symbols from trade history
         trade_symbols = set(trade.symbol for trade in self.trade_history)
+
+        # Add benchmark symbol to ensure it's available for performance comparison
+        trade_symbols.add(self.benchmark_symbol)
 
         # Fetch price data for all symbols
         for symbol in trade_symbols:
@@ -86,12 +103,15 @@ class MockTrade:
                 if trade_date.weekday() >= 5:
                     trade_date = trade_date + pd.Timedelta(days=7 - trade_date.weekday())
 
-                if trade_date == first_trade_date and trade.volume > 0:  # Only count buys
+                if trade_date == first_trade_date and (trade.volume is not None and trade.volume > 0 or trade.cash_amount is not None and trade.cash_amount > 0 or trade.percentage is not None and trade.percentage > 0):  # Only count buys
                     if trade.symbol in self.symbol_data:
                         prices = self.symbol_data[trade.symbol]['Close'].reindex(self.date_range, method='ffill')
                         if trade_date in prices.index:
                             price = prices.loc[trade_date]
-                            initial_value += trade.volume * price
+                            if trade.volume is not None:
+                                initial_value += trade.volume * price
+                            elif trade.cash_amount is not None:
+                                initial_value += trade.cash_amount
 
             self.initial_investment = initial_value
             print(f"Calculated initial investment: ${self.initial_investment:.2f}")
@@ -104,6 +124,9 @@ class MockTrade:
         # Pre-cache adjusted trade dates for performance
         self._cache_trade_dates()
 
+        # Convert all cash-based trades to volume-based trades upfront
+        self._convert_cash_trades()
+
         # Initialize trade logging table
         self._init_trade_log()
 
@@ -114,6 +137,114 @@ class MockTrade:
             if trade_date.weekday() >= 5:  # Weekend adjustment
                 trade_date = trade_date + pd.Timedelta(days=7 - trade_date.weekday())
             self._cached_trade_dates[i] = trade_date
+
+    def _convert_cash_trades(self):
+        """Convert all cash-based trades to volume-based trades using historical prices."""
+        for i, trade in enumerate(self.trade_history):
+            if trade.cash_amount is not None and trade.volume is None:
+                trade_date = self._cached_trade_dates[i]
+
+                # Skip if trade date is outside our range
+                if trade_date not in self.date_range:
+                    continue
+
+                symbol = trade.symbol
+                if symbol in self.symbol_data:
+                    # Get price data for this symbol
+                    prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+
+                    if trade_date in prices.index:
+                        trade_price = prices.loc[trade_date]
+                        trade.convert_cash_to_volume(trade_price)
+
+    def _get_symbol_value_at_date(self, symbol: str, target_date: pd.Timestamp) -> float:
+        """Get the current position value for a specific symbol at a specific date (before any trades on that date)."""
+        # Calculate holdings for this symbol up to the target date
+        symbol_holdings = 0
+
+        for i, trade in enumerate(self.trade_history):
+            trade_date = self._cached_trade_dates[i]
+
+            # Only process trades for this symbol up to (but not including) the target date
+            if trade_date >= target_date:
+                break
+
+            if trade.symbol == symbol and trade_date in self.date_range:
+                # Use actual volume (which should be converted by now)
+                volume = trade.volume or 0
+                symbol_holdings += volume
+
+        # Calculate value of current holdings
+        if symbol_holdings == 0:
+            return 0.0
+
+        if symbol in self.symbol_data:
+            # Find the last business day before target_date for pricing
+            price_date = target_date - pd.Timedelta(days=1)
+            while price_date.weekday() >= 5:  # Skip weekends
+                price_date = price_date - pd.Timedelta(days=1)
+
+            # If price date is before our range, use target date
+            if price_date < self.date_range[0]:
+                price_date = target_date
+
+            prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+            if price_date in prices.index:
+                price = prices.loc[price_date]
+                return symbol_holdings * price
+
+        return 0.0
+
+    def _get_portfolio_value_at_date(self, target_date: pd.Timestamp) -> float:
+        """Get the portfolio value at a specific date (before any trades on that date)."""
+        # For the first trade, use initial investment
+        if target_date <= self.date_range[0]:
+            return self.initial_investment
+
+        # Find the last business day before target_date
+        previous_date = target_date - pd.Timedelta(days=1)
+        while previous_date.weekday() >= 5:  # Skip weekends
+            previous_date = previous_date - pd.Timedelta(days=1)
+
+        # If previous date is before our range, use initial investment
+        if previous_date < self.date_range[0]:
+            return self.initial_investment
+
+        # Calculate portfolio value at previous date by simulating trades up to that point
+        temp_holdings = {symbol: 0 for symbol in self.holdings.keys()}
+        temp_cash = self.initial_investment
+
+        for i, trade in enumerate(self.trade_history):
+            trade_date = self._cached_trade_dates[i]
+
+            # Only process trades up to the previous date
+            if trade_date > previous_date:
+                break
+
+            if trade_date in self.date_range and trade.symbol in self.symbol_data:
+                # Get price for this trade
+                prices = self.symbol_data[trade.symbol]['Close'].reindex(self.date_range, method='ffill')
+                if trade_date in prices.index:
+                    trade_price = prices.loc[trade_date]
+
+                    # Use actual volume (which should be converted by now)
+                    volume = trade.volume or 0
+                    trade_value = volume * trade_price
+
+                    # Update cash and holdings
+                    temp_cash -= trade_value
+                    temp_holdings[trade.symbol] += volume
+
+        # Calculate total value at previous date
+        total_holdings_value = 0.0
+        for symbol, shares in temp_holdings.items():
+            if shares != 0 and symbol in self.symbol_data:
+                prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+                if previous_date in prices.index:
+                    price = prices.loc[previous_date]
+                    total_holdings_value += shares * price
+
+        return total_holdings_value + temp_cash
 
     def _init_trade_log(self):
         """Initialize trade logging table."""
@@ -229,8 +360,6 @@ class MockTrade:
             return
 
         symbol = trade.symbol
-        volume = trade.volume
-        action = "BUY" if volume > 0 else "SELL"
 
         if symbol in self.symbol_data:
             # Get price data for this symbol
@@ -238,16 +367,38 @@ class MockTrade:
 
             if trade_date in prices.index:
                 trade_price = prices.loc[trade_date]
+
+                # Convert percentage-based trades to volume-based using current price and symbol position
+                if trade.percentage is not None and trade.volume is None:
+                    symbol_value = self._get_symbol_value_at_date(symbol, trade_date)
+                    trade.convert_percentage_to_volume(trade_price, symbol_value)
+
+                volume = trade.volume
+                action = "BUY" if volume > 0 else "SELL"
                 trade_value = volume * trade_price
 
                 # Update cash (subtract for buys, add for sells)
                 cash_change = -trade_value
                 current_cash = self.portfolio_df.loc[trade_date, 'cash']
 
+                # Debug NaN values
+                if pd.isna(current_cash):
+                    print(f"DEBUG: current_cash is NaN for {symbol} on {trade_date}")
+                    print(f"DEBUG: trade_price={trade_price}, trade_value={trade_value}, cash_change={cash_change}")
+                    print(f"DEBUG: portfolio_df cash column stats:")
+                    print(self.portfolio_df['cash'].describe())
+                if pd.isna(cash_change):
+                    print(f"DEBUG: cash_change is NaN for {symbol} on {trade_date}")
+                    print(f"DEBUG: trade_price={trade_price}, volume={volume}, trade_value={trade_value}")
+
                 # Apply unified clipping logic for both sell and buy orders
                 actual_volume, was_clipped, clip_reason = self._apply_clipping_logic(
                     trade, self.current_trade_index, trade_date, current_cash
                 )
+
+                # Update trade record to reflect the actual executed volume
+                if was_clipped:
+                    trade.volume = actual_volume
 
                 # Update cash change and trade value to match actual volume
                 actual_trade_value = actual_volume * trade_price
@@ -281,9 +432,9 @@ class MockTrade:
                 print(f"{self.current_trade_index+1:<3} {trade_date.strftime('%Y-%m-%d'):<12} {action:<6} {symbol:<8} {abs(actual_volume):<8} ${trade_price:<9.2f} ${abs(trade_value):<11.2f} ${new_cash:<11.2f} {holdings_str:<15}{clipped_note}")
 
         # Recalculate portfolio values (optimized version)
-        self._update_portfolio_values()
+        self._update_portfolio_values(trade_date)
 
-    def _update_portfolio_values(self):
+    def _update_portfolio_values(self, current_trade_date: pd.Timestamp = None):
         """Update total portfolio values based on holdings at each date - optimized version."""
         # Pre-process and cache price data for all symbols (major optimization)
         cached_prices = {}
@@ -294,7 +445,8 @@ class MockTrade:
         holdings_df = pd.DataFrame(0, index=self.date_range, columns=list(self.holdings.keys()))
 
         # Process trades efficiently using cached dates and executed volumes
-        for i in range(self.current_trade_index + 1):
+        max_trade_index = min(self.current_trade_index + 1, len(self.trade_history))
+        for i in range(max_trade_index):
             trade = self.trade_history[i]
             trade_date = self._cached_trade_dates[i]  # Use cached date
 
@@ -332,12 +484,20 @@ class MockTrade:
         total_holding_value = 0.0
         for symbol, shares in self.holdings.items():
             if shares != 0 and symbol in cached_prices:
-                current_price = cached_prices[symbol].iloc[-1]  # Latest price
+                # Use price at current trade date if available, otherwise latest price
+                if current_trade_date is not None and current_trade_date in cached_prices[symbol].index:
+                    current_price = cached_prices[symbol].loc[current_trade_date]
+                else:
+                    current_price = cached_prices[symbol].iloc[-1]  # Fallback to latest price
                 position_value = shares * current_price
                 total_holding_value += position_value
                 print(f"{symbol:<8}: {shares:>6} shares @ ${current_price:>8.2f} = ${position_value:>10.2f}")
 
-        current_cash = self.portfolio_df['cash'].iloc[-1]
+        # Use cash at current trade date if available, otherwise latest cash
+        if current_trade_date is not None and current_trade_date in self.portfolio_df.index:
+            current_cash = self.portfolio_df.loc[current_trade_date, 'cash']
+        else:
+            current_cash = self.portfolio_df['cash'].iloc[-1]
         total_portfolio = total_holding_value + current_cash
 
         print("-" * 40)
@@ -345,6 +505,68 @@ class MockTrade:
         print(f"{'Cash':<8}: ${current_cash:>26.2f}")
         print(f"{'Portfolio':<8}: ${total_portfolio:>26.2f}")
         print("-" * 40)
+
+    def _calculate_yearly_return(self, end_date: pd.Timestamp, benchmark_symbol: str = "SPY"):
+        """Calculate and display the average yearly return of the portfolio."""
+        start_date = pd.to_datetime(self.start_date)
+
+        # Calculate time period in years
+        time_diff = end_date - start_date
+        years = time_diff.days / 365.25  # Account for leap years
+
+        # Get initial and final portfolio values
+        initial_value = self.initial_investment
+
+        # Get final portfolio value at end date
+        if end_date in self.portfolio_df.index:
+            final_value = self.portfolio_df.loc[end_date, 'portfolio_value']
+        else:
+            # Find closest date if end date not in index
+            final_value = self.portfolio_df['portfolio_value'].iloc[-1]
+
+        # Calculate total return and annualized return
+        total_return = (final_value - initial_value) / initial_value
+
+        if years > 0:
+            # Compound annual growth rate (CAGR)
+            annualized_return = (final_value / initial_value) ** (1 / years) - 1
+        else:
+            annualized_return = 0.0
+
+        print(f"\n{'='*40}")
+        print(f"PERFORMANCE SUMMARY")
+        print(f"{'='*40}")
+        print(f"Investment Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        print(f"Time Period: {years:.2f} years")
+        print(f"Initial Investment: ${initial_value:,.2f}")
+        print(f"Final Portfolio Value: ${final_value:,.2f}")
+        print(f"Total Return: {total_return:.2%} (${final_value - initial_value:,.2f})")
+        print(f"Average Yearly Return (CAGR): {annualized_return:.2%}")
+
+        # Calculate benchmark performance
+        try:
+            benchmark_data = self.backend.get_daily_price(benchmark_symbol, self.start_date, self.end_date)
+            benchmark_start_price = benchmark_data['Close'].iloc[0]
+            benchmark_end_price = benchmark_data['Close'].iloc[-1]
+            benchmark_total_return = (benchmark_end_price - benchmark_start_price) / benchmark_start_price
+
+            if years > 0:
+                benchmark_annualized_return = (benchmark_end_price / benchmark_start_price) ** (1 / years) - 1
+            else:
+                benchmark_annualized_return = 0.0
+
+            print(f"\nBENCHMARK ({benchmark_symbol}):")
+            print(f"{benchmark_symbol} Total Return: {benchmark_total_return:.2%}")
+            print(f"{benchmark_symbol} Average Yearly Return (CAGR): {benchmark_annualized_return:.2%}")
+
+            # Calculate relative performance
+            excess_return = annualized_return - benchmark_annualized_return
+            print(f"Excess Return vs {benchmark_symbol}: {excess_return:.2%}")
+
+        except Exception as e:
+            print(f"\nNote: Could not fetch {benchmark_symbol} benchmark data: {e}")
+
+        print(f"{'='*40}")
 
     def get_holdings_for_date(self, date: str, show_report: bool = False) -> pd.DataFrame:
         """
