@@ -285,11 +285,32 @@ class Frontend:
         if existing_lines == 0:
             plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-        # Add 20% margin on top and bottom of y-axis
+        # Check if data appears to be normalized (values around 1.0)
+        is_normalized = False
+        if all_data:
+            # Sample some data points to determine if this looks like normalized data
+            sample_values = []
+            for data in all_data.values():
+                if not data.empty:
+                    sample_values.extend(data.iloc[:10].tolist())  # Sample first 10 values
+
+            if sample_values:
+                # Consider it normalized if most values are close to 1.0 (between 0.1 and 10)
+                close_to_one = sum(1 for val in sample_values if 0.1 <= val <= 10)
+                is_normalized = close_to_one / len(sample_values) > 0.8
+
+        # Add horizontal line at y=1 for normalized data to show profit/loss reference
+        if is_normalized:
+            ax_price.axhline(y=1, color='red', linestyle='-', alpha=0.9, linewidth=3,
+                           label='Break-even (1.0)', zorder=10)
+            # Update legend to include the reference line
+            ax_price.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
+
+        # Set y-axis range with 0 as lower bound and 20% margin on top
         y_min, y_max = ax_price.get_ylim()
         y_range = y_max - y_min
         margin = y_range * 0.20
-        ax_price.set_ylim(y_min - margin, y_max + margin)
+        ax_price.set_ylim(0, y_max + margin)
 
         # Also adjust secondary axis if it exists
         if ax_secondary is not None:

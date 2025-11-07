@@ -24,6 +24,8 @@ class MockTrade:
         self.initial_investment: float = 0.0
         self._cached_trade_dates: Dict[int, pd.Timestamp] = {}  # Cache adjusted trade dates
         self._executed_volumes: Dict[int, int] = {}  # Cache actual executed volumes (after clipping)
+        self._cached_prices: Dict[str, pd.Series] = {}  # Cache reindexed price data
+        self._incremental_holdings: Dict[str, int] = {}  # Track holdings incrementally
 
     def mock(self, as_stock_config: bool = True) -> Union[DataFrame, StockConfig]:
         """Execute the mock trading simulation and return portfolio performance."""
@@ -33,6 +35,10 @@ class MockTrade:
         while self.current_trade_index < len(self.trade_history):
             self.trade_one()
             self.current_trade_index += 1
+
+        # Calculate portfolio values once at the end for performance
+        print(f"\nCalculating portfolio values...")
+        self._update_portfolio_values()
 
         # Show final portfolio state at end of simulation
         end_date = pd.to_datetime(self.end_date)
@@ -48,12 +54,16 @@ class MockTrade:
         self._calculate_yearly_return(end_date, self.benchmark_symbol)
 
         if as_stock_config:
+            # Filter out dates with zero portfolio values (non-business days or incomplete data)
+            valid_mask = self.portfolio_df['portfolio_value'] > 0
+            filtered_portfolio = self.portfolio_df[valid_mask]
+
             final_portfolio_df = pd.DataFrame({
-                'Close': self.portfolio_df['portfolio_value'],
-                'Open': self.portfolio_df['portfolio_value'],
-                'High': self.portfolio_df['portfolio_value'],
-                'Low': self.portfolio_df['portfolio_value']
-            }, index=self.portfolio_df.index)
+                'Close': filtered_portfolio['portfolio_value'],
+                'Open': filtered_portfolio['portfolio_value'],
+                'High': filtered_portfolio['portfolio_value'],
+                'Low': filtered_portfolio['portfolio_value']
+            }, index=filtered_portfolio.index)
             final_portfolio_df['symbol'] = self.name
             portfolio_config = StockConfig(symbol=self.name, data=final_portfolio_df, normalize=True)
             return portfolio_config
@@ -76,8 +86,11 @@ class MockTrade:
         for symbol in trade_symbols:
             self.symbol_data[symbol] = self.backend.get_daily_price(symbol, self.start_date, self.end_date)
 
-        # Create business day date range
+        # Create business day date range FIRST
         self.date_range = pd.bdate_range(start=self.start_date, end=self.end_date, freq='B')
+
+        # Pre-cache reindexed price data for performance (AFTER date_range is defined)
+        self._cache_price_data()
 
         # Initialize portfolio DataFrame
         self.portfolio_df = pd.DataFrame(index=self.date_range)
@@ -89,6 +102,7 @@ class MockTrade:
         # Initialize holdings
         for symbol in trade_symbols:
             self.holdings[symbol] = 0
+            self._incremental_holdings[symbol] = 0
 
         # Calculate initial investment based on first trade date
         if self.trade_history:
@@ -130,6 +144,20 @@ class MockTrade:
         # Initialize trade logging table
         self._init_trade_log()
 
+    def _cache_price_data(self):
+        """Pre-cache reindexed price data for all symbols to avoid repeated reindexing."""
+        for symbol in self.symbol_data:
+            # Reindex price data to business days and forward-fill missing values
+            price_series = self.symbol_data[symbol]['Close']
+            reindexed_prices = price_series.reindex(self.date_range, method='ffill')
+
+            # Ensure no NaN values by using the first available price for early dates
+            if reindexed_prices.isna().any():
+                first_valid_price = price_series.dropna().iloc[0] if not price_series.dropna().empty else 0
+                reindexed_prices = reindexed_prices.fillna(first_valid_price)
+
+            self._cached_prices[symbol] = reindexed_prices
+
     def _cache_trade_dates(self):
         """Pre-cache adjusted trade dates for performance optimization."""
         for i, trade in enumerate(self.trade_history):
@@ -149,9 +177,9 @@ class MockTrade:
                     continue
 
                 symbol = trade.symbol
-                if symbol in self.symbol_data:
-                    # Get price data for this symbol
-                    prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+                if symbol in self._cached_prices:
+                    # Get price data for this symbol using cached data
+                    prices = self._cached_prices[symbol]
 
                     if trade_date in prices.index:
                         trade_price = prices.loc[trade_date]
@@ -188,7 +216,7 @@ class MockTrade:
             if price_date < self.date_range[0]:
                 price_date = target_date
 
-            prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+            prices = self._cached_prices[symbol]
             if price_date in prices.index:
                 price = prices.loc[price_date]
                 return symbol_holdings * price
@@ -221,9 +249,9 @@ class MockTrade:
             if trade_date > previous_date:
                 break
 
-            if trade_date in self.date_range and trade.symbol in self.symbol_data:
-                # Get price for this trade
-                prices = self.symbol_data[trade.symbol]['Close'].reindex(self.date_range, method='ffill')
+            if trade_date in self.date_range and trade.symbol in self._cached_prices:
+                # Get price for this trade using cached data
+                prices = self._cached_prices[trade.symbol]
                 if trade_date in prices.index:
                     trade_price = prices.loc[trade_date]
 
@@ -238,8 +266,8 @@ class MockTrade:
         # Calculate total value at previous date
         total_holdings_value = 0.0
         for symbol, shares in temp_holdings.items():
-            if shares != 0 and symbol in self.symbol_data:
-                prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+            if shares != 0 and symbol in self._cached_prices:
+                prices = self._cached_prices[symbol]
                 if previous_date in prices.index:
                     price = prices.loc[previous_date]
                     total_holdings_value += shares * price
@@ -258,6 +286,7 @@ class MockTrade:
         """
         Calculate holdings for a specific symbol at a given date by replaying trades.
         This method applies clipping logic to get accurate holdings.
+        OPTIMIZED: Uses incremental tracking to avoid recursive calls.
 
         Args:
             symbol: Symbol to calculate holdings for
@@ -270,6 +299,7 @@ class MockTrade:
         holdings = 0
         max_index = up_to_trade_index if up_to_trade_index is not None else len(self.trade_history)
 
+        # Incremental tracking - process trades in order for this symbol only
         for i in range(max_index):
             trade = self.trade_history[i]
             trade_date = self._cached_trade_dates[i]
@@ -278,12 +308,9 @@ class MockTrade:
             if trade.symbol == symbol and trade_date <= target_date:
                 actual_volume = trade.volume
 
-                # Apply clipping for sell orders
+                # Apply clipping for sell orders using current holdings
                 if trade.volume < 0:  # Sell order
-                    # Calculate holdings just before this trade
-                    holdings_before_trade = self._calculate_holdings_at_date(symbol, trade_date, i)
-                    max_sellable = -holdings_before_trade  # Negative because volume is negative for sells
-
+                    max_sellable = -holdings  # Negative because volume is negative for sells
                     if trade.volume < max_sellable:  # Trying to sell more than we have
                         actual_volume = max_sellable
 
@@ -319,9 +346,9 @@ class MockTrade:
                 clip_reason = f"sell_holdings_{holdings_at_date}"
 
         elif trade.volume > 0 and current_cash is not None:  # Buy order - check cash
-            # Get current price for this trade
-            if trade.symbol in self.symbol_data:
-                prices = self.symbol_data[trade.symbol]['Close'].reindex(self.date_range, method='ffill')
+            # Get current price for this trade using cached data
+            if trade.symbol in self._cached_prices:
+                prices = self._cached_prices[trade.symbol]
                 if target_date in prices.index:
                     trade_price = prices.loc[target_date]
                     trade_value = trade.volume * trade_price
@@ -362,8 +389,8 @@ class MockTrade:
         symbol = trade.symbol
 
         if symbol in self.symbol_data:
-            # Get price data for this symbol
-            prices = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+            # Use cached price data for performance
+            prices = self._cached_prices[symbol]
 
             if trade_date in prices.index:
                 trade_price = prices.loc[trade_date]
@@ -420,10 +447,11 @@ class MockTrade:
 
                 # Update holdings
                 self.holdings[symbol] += actual_volume
+                self._incremental_holdings[symbol] += actual_volume
 
-                # Apply trade from trade_date onwards
-                for date in self.date_range[self.date_range >= trade_date]:
-                    self.portfolio_df.loc[date, 'cash'] += cash_change
+                # Efficiently update cash using vectorized operations
+                mask = self.portfolio_df.index >= trade_date
+                self.portfolio_df.loc[mask, 'cash'] += cash_change
 
                 # Format table row logging
                 new_cash = current_cash + cash_change
@@ -431,15 +459,12 @@ class MockTrade:
                 clipped_note = " (CLIPPED)" if actual_volume != volume else ""
                 print(f"{self.current_trade_index+1:<3} {trade_date.strftime('%Y-%m-%d'):<12} {action:<6} {symbol:<8} {abs(actual_volume):<8} ${trade_price:<9.2f} ${abs(trade_value):<11.2f} ${new_cash:<11.2f} {holdings_str:<15}{clipped_note}")
 
-        # Recalculate portfolio values (optimized version)
-        self._update_portfolio_values(trade_date)
+        # Note: Portfolio value updates and holdings summary are deferred to the end for performance
 
     def _update_portfolio_values(self, current_trade_date: pd.Timestamp = None):
         """Update total portfolio values based on holdings at each date - optimized version."""
-        # Pre-process and cache price data for all symbols (major optimization)
-        cached_prices = {}
-        for symbol in self.symbol_data:
-            cached_prices[symbol] = self.symbol_data[symbol]['Close'].reindex(self.date_range, method='ffill')
+        # Use pre-cached price data for all symbols (major optimization)
+        cached_prices = self._cached_prices
 
         # Build holdings using vectorized operations
         holdings_df = pd.DataFrame(0, index=self.date_range, columns=list(self.holdings.keys()))
@@ -472,7 +497,10 @@ class MockTrade:
             if symbol in cached_prices:
                 # Vectorized multiplication - much faster
                 position_values = holdings_df[symbol] * cached_prices[symbol]
-                total_values += position_values.fillna(0)
+                # Ensure no NaN values are introduced
+                position_values = position_values.fillna(0)
+                # Only add valid numeric values
+                total_values += position_values
 
         # Batch update portfolio DataFrame
         self.portfolio_df['total_value'] = total_values
