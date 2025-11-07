@@ -28,11 +28,13 @@ class MacroConfig:
 
 @dataclass
 class Trade:
+    index: int
     symbol: str
     date: str  # datetime to perform the trade, e.g. '2025-01-01'
     volume: Optional[int] = None  # amount of stocks to buy (positive) / sell (negative)
     cash_amount: Optional[float] = None  # amount of cash to invest (positive) / divest (negative)
     percentage: Optional[float] = None  # percentage of portfolio to invest (positive) / divest (negative)
+    desc: Optional[str] = None
 
     def __post_init__(self):
         """Validate input and convert cash_amount to volume if needed"""

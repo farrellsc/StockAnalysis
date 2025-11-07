@@ -54,10 +54,18 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
 
     # Process portfolio to create portfolio tracking dataframe
     portfolio_configs = []
+    tags = {}  # Collect trade dates for annotations
+
     if portfolios:
         # Use MockTrade for more sophisticated portfolio simulation
         print("Using MockTrade for portfolio simulation...")
         for portfolio in portfolios:
+            # Collect trade dates and create tags
+            for i, trade in enumerate(portfolio.trade_history):
+                trade_date = trade.date
+                tag_text = f"[#{i+1}][{trade.symbol}] {trade.desc}"
+                tags[trade_date] = tag_text
+
             mock_trader = MockTrade(
                 backend=backend,
                 trade_history=portfolio.trade_history,
@@ -68,7 +76,16 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
             )
             portfolio_configs.append(mock_trader.mock(as_stock_config=True))
 
-    all_configs = stocks + portfolio_configs
+    # Add benchmark to the plot
+    benchmark_configs = []
+    if benchmark and benchmark not in [config.symbol for config in stocks]:
+        print(f"Adding benchmark {benchmark} to the plot...")
+        benchmark_data = backend.get_daily_price(benchmark, start_date, end_date)
+        if benchmark_data is not None and not benchmark_data.empty:
+            benchmark_config = StockConfig(symbol=f"{benchmark} (Benchmark)", data=benchmark_data, normalize=True)
+            benchmark_configs.append(benchmark_config)
+
+    all_configs = portfolio_configs + benchmark_configs + stocks
 
     for i, config in enumerate(all_configs):
         if config.normalize:
@@ -104,10 +121,19 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
         secondary_dataframes.append(backend.get_unemployment_rate(start_date, end_date))
         secondary_ylabel = "percent"
 
+    # Separate data into appropriate categories
+    stock_dataframes = [config.data for config in stocks]
+    stock_symbols = [config.symbol for config in stocks]
+
+    portfolio_dataframes = [config.data for config in portfolio_configs] if portfolio_configs else None
+    portfolio_symbols = [config.symbol for config in portfolio_configs] if portfolio_configs else None
+
+    benchmark_dataframes = [config.data for config in benchmark_configs] if benchmark_configs else None
+    benchmark_symbols = [config.symbol for config in benchmark_configs] if benchmark_configs else None
 
     fig = frontend.plot_price_comparison(
-        dataframes=dataframes,
-        symbols=symbols,
+        dataframes=stock_dataframes,
+        symbols=stock_symbols,
         ylabel="Price",
         price_column=price_column,
         show_volume=show_volume,
@@ -116,6 +142,11 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
         secondary_dataframes=secondary_dataframes if secondary_dataframes else None,
         secondary_symbols=secondary_symbols if secondary_symbols else None,
         secondary_ylabel=secondary_ylabel,
+        tags=tags if tags else None,
+        portfolio_dataframes=portfolio_dataframes,
+        portfolio_symbols=portfolio_symbols,
+        benchmark_dataframes=benchmark_dataframes,
+        benchmark_symbols=benchmark_symbols,
     )
 
     return dataframes
