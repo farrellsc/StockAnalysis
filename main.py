@@ -36,7 +36,7 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     An API to plot curves by reading the database with input symbols.
     """
     # Initialize backend and frontend
-    frontend = Frontend()
+    frontend = Frontend(mute=True)
     backend = Backend(database=Database(file_path=os.path.join(DATA_DIR, "stock_data.pkl")))
 
     # Fetch data for stocks
@@ -76,10 +76,13 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
             )
             portfolio_configs.append(mock_trader.mock(as_stock_config=True))
 
-    # Add benchmark to the plot
+    # Remove benchmark from stocks if it's already there, then add as dedicated benchmark
     benchmark_configs = []
-    if benchmark and benchmark not in [config.symbol for config in stocks]:
-        print(f"Adding benchmark {benchmark} to the plot...")
+    if benchmark:
+        # Remove benchmark from stocks if present
+        stocks = [config for config in stocks if config.symbol != benchmark]
+
+        # Add as dedicated benchmark
         benchmark_data = backend.get_daily_price(benchmark, start_date, end_date)
         if benchmark_data is not None and not benchmark_data.empty:
             benchmark_config = StockConfig(symbol=f"{benchmark} (Benchmark)", data=benchmark_data, normalize=True)
@@ -90,14 +93,6 @@ def plot_prices(stocks: List[StockConfig], start_date: str, end_date: str,
     for i, config in enumerate(all_configs):
         if config.normalize:
             config.data = backend.normalize_data(config.data)
-        data_info = f"{len(config.data)} rows" if config.data is not None else "None"
-        print(f"  {i}: {config.symbol} - {data_info}")
-        if config.data is not None and len(config.data) > 0:
-            if price_column in config.data.columns:
-                price_range = f"{config.data[price_column].min():.2f} to {config.data[price_column].max():.2f}"
-                print(f"      Price range: {price_range}")
-            else:
-                print(f"      Columns: {list(config.data.columns)}")
 
     dataframes = [config.data for config in all_configs]
     symbols = [config.symbol for config in all_configs]

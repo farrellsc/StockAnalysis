@@ -13,7 +13,7 @@ from logging_config import LoggingConfig
 class Frontend:
     """Frontend class for visualizing stock data using matplotlib."""
 
-    def __init__(self, style: str = 'seaborn-v0_8', figsize: Tuple[int, int] = (15, 10), log_level: str = 'INFO'):
+    def __init__(self, style: str = 'seaborn-v0_8', figsize: Tuple[int, int] = (15, 10), log_level: str = 'INFO', mute: bool = False):
         """
         Initialize the Frontend with visualization settings.
 
@@ -21,11 +21,18 @@ class Frontend:
             style (str): Matplotlib style to use. Options: 'seaborn-v0_8', 'ggplot', 'dark_background', etc.
             figsize (tuple): Default figure size (width, height) in inches.
             log_level (str): Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+            mute (bool): If True, suppress all print outputs and logging
         """
+        # Set mute option
+        self.mute = mute
+
         # Set up logging using centralized config
         self.logger = LoggingConfig.get_logger('frontend')
-        if log_level:
+        if log_level and not mute:
             LoggingConfig.set_level_for_component('frontend', log_level)
+        elif mute:
+            # Set logging to highest level to suppress all logs
+            LoggingConfig.set_level_for_component('frontend', 'CRITICAL')
 
         # Set matplotlib style
         try:
@@ -41,7 +48,13 @@ class Frontend:
         # Set up seaborn for better aesthetics
         sns.set_palette("husl")
 
-        self.logger.info(f"Frontend initialized with style: {style}, figsize: {figsize}")
+        if not self.mute:
+            self.logger.info(f"Frontend initialized with style: {style}, figsize: {figsize}")
+
+    def _print(self, message: str):
+        """Conditional print that respects mute setting."""
+        if not self.mute:
+            print(message)
 
     def create_figure(self, show_volume: bool = True, figsize: Tuple[int, int] = None) -> Tuple[plt.Figure, plt.Axes, Optional[plt.Axes]]:
         """
@@ -176,9 +189,9 @@ class Frontend:
             # Use existing axes - if show_volume is True but ax_volume is None,
             # we'll just plot on the existing price axis
             if show_volume and ax_volume is None:
-                print("⚠️  show_volume=True but no ax_volume provided, skipping volume plot")
+                self._print("⚠️  show_volume=True but no ax_volume provided, skipping volume plot")
 
-        print(f"📈 Plotting comparison chart for {len(symbols)} symbols...")
+        self._print(f"📈 Plotting comparison chart for {len(symbols)} symbols...")
 
         # Track data and lines for statistics and legend
         all_data = {}
@@ -247,14 +260,14 @@ class Frontend:
             # Plot each secondary stock
             for i, (df, symbol) in enumerate(zip(secondary_dataframes, secondary_symbols)):
                 if df.empty:
-                    print(f"⚠️  Skipping secondary {symbol}: No data available")
+                    self._print(f"⚠️  Skipping secondary {symbol}: No data available")
                     continue
 
                 # Get secondary price data
                 price_data = df[secondary_price_column].dropna()
 
                 if price_data.empty:
-                    print(f"⚠️  Skipping secondary {symbol}: No valid price data")
+                    self._print(f"⚠️  Skipping secondary {symbol}: No valid price data")
                     continue
 
                 # Use different line style for secondary data
@@ -398,8 +411,8 @@ class Frontend:
             self.logger.info(f"Successfully created comparison chart for {len(symbols)} primary and {len(secondary_symbols)} secondary symbols")
         else:
             self.logger.info(f"Successfully created comparison chart for {len(symbols)} symbols")
-        print("💡 Hover over the lines to see detailed information")
-        print("💡 Use plt.show() to display the plot when ready")
+        self._print("💡 Hover over the lines to see detailed information")
+        self._print("💡 Use plt.show() to display the plot when ready")
 
         return fig, ax_price, ax_volume, ax_secondary
 
@@ -426,7 +439,7 @@ class Frontend:
         """
         fig.savefig(save_path, dpi=dpi, bbox_inches='tight',
                    facecolor='white', edgecolor='none')
-        print(f"✓ Plot saved to: {save_path}")
+        self._print(f"✓ Plot saved to: {save_path}")
 
     def _add_statistics_box(self, ax, data_dict: Dict, symbols: List[str]):
         """Add a statistics box to the plot, positioned dynamically to avoid overlap with legend."""
@@ -466,8 +479,8 @@ class Frontend:
 
     def _print_summary_stats(self, data_dict: Dict, symbols: List[str]):
         """Print summary statistics to console."""
-        print("\n📊 Summary Statistics:")
-        print("-" * 50)
+        self._print("\n📊 Summary Statistics:")
+        self._print("-" * 50)
 
         for symbol in symbols:
             if symbol not in data_dict or data_dict[symbol].empty:
@@ -479,12 +492,12 @@ class Frontend:
             # Auto-detect format based on data range
             if abs(latest_value) < 10 and latest_value != int(latest_value):
                 # Likely normalized data
-                print(f"{symbol:>6}: Latest: {latest_value:8.3f} | "
+                self._print(f"{symbol:>6}: Latest: {latest_value:8.3f} | "
                       f"Min: {data.min():8.3f} | Max: {data.max():8.3f} | "
                       f"Avg: {data.mean():8.3f}")
             else:
                 # Likely price data
-                print(f"{symbol:>6}: Latest: {latest_value:8.2f} | "
+                self._print(f"{symbol:>6}: Latest: {latest_value:8.2f} | "
                       f"Min: {data.min():8.2f} | Max: {data.max():8.2f} | "
                       f"Avg: {data.mean():8.2f}")
 
@@ -561,12 +574,12 @@ class Frontend:
     def _validate_and_get_price_data(self, df, symbol, price_column, data_type):
         """Validate dataframe and extract price data."""
         if df.empty:
-            print(f"⚠️  Skipping {data_type} {symbol}: No data available")
+            self._print(f"⚠️  Skipping {data_type} {symbol}: No data available")
             return None
 
         price_data = df[price_column].dropna()
         if price_data.empty:
-            print(f"⚠️  Skipping {data_type} {symbol}: No valid price data")
+            self._print(f"⚠️  Skipping {data_type} {symbol}: No valid price data")
             return None
 
         return price_data
@@ -605,7 +618,7 @@ class Frontend:
             cluster_y_position = cluster_positions[i]
             self._position_cluster_tags(ax, cluster, all_data, y_min, y_max, y_range, sample_data, cluster_y_position)
 
-        print(f"📌 Added {len(tags)} tag(s) to the plot in {len(tag_clusters)} cluster(s)")
+        self._print(f"📌 Added {len(tags)} tag(s) to the plot in {len(tag_clusters)} cluster(s)")
 
     def _group_tags_by_proximity(self, sorted_tags, cluster_days=7):
         """Group tags that are close in time into clusters."""
@@ -818,7 +831,7 @@ class Frontend:
                     date_group_positions.append((date_key, annotation_text, tag_y))
 
                 # Debug output for same-date tags
-                print(f"📅 Same date ({date_str}): {len(tags_in_date)} tags, spacing={same_date_spacing:.3f}")
+                self._print(f"📅 Same date ({date_str}): {len(tags_in_date)} tags, spacing={same_date_spacing:.3f}")
             else:
                 date_key, annotation_text = tags_in_date[0]
                 date_group_positions.append((date_key, annotation_text, group_base_y))
@@ -833,7 +846,7 @@ class Frontend:
                     data_end = sample_data.index.max()
 
                     if tag_date < data_start or tag_date > data_end:
-                        print(f"⚠️  Tag date {tag_date.strftime('%Y-%m-%d')} is outside data range, skipping")
+                        self._print(f"⚠️  Tag date {tag_date.strftime('%Y-%m-%d')} is outside data range, skipping")
                         continue
 
                 # Keep within bounds
@@ -856,7 +869,7 @@ class Frontend:
                 self.logger.debug(f"Added clustered tag '{annotation_text}' at {tag_date.strftime('%Y-%m-%d')}")
 
             except Exception as e:
-                print(f"⚠️  Error adding clustered tag for date {date_key}: {e}")
+                self._print(f"⚠️  Error adding clustered tag for date {date_key}: {e}")
                 continue
 
     def _find_non_overlapping_position(self, tag_date, preferred_y, used_positions, y_min, y_max, y_range, text_height):

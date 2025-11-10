@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Union
 from backend import Backend
 from pandas import DataFrame
 import pandas as pd
-from structs import Trade, StockConfig
+from structs import Trade, StockConfig, Position
 
 
 @dataclass
@@ -223,6 +223,25 @@ class MockTrade:
 
         return 0.0
 
+    def _get_symbol_holdings_at_date(self, symbol: str, target_date: pd.Timestamp) -> float:
+        """Get the current holdings volume for a specific symbol at a specific date (before any trades on that date)."""
+        # Calculate holdings for this symbol up to the target date
+        symbol_holdings = 0.0
+
+        for i, trade in enumerate(self.trade_history):
+            trade_date = self._cached_trade_dates[i]
+
+            # Only process trades for this symbol up to (but not including) the target date
+            if trade_date >= target_date:
+                break
+
+            if trade.symbol == symbol and trade_date in self.date_range:
+                # Use actual volume (which should be converted by now)
+                volume = trade.volume or 0.0
+                symbol_holdings += volume
+
+        return symbol_holdings
+
     def _get_portfolio_value_at_date(self, target_date: pd.Timestamp) -> float:
         """Get the portfolio value at a specific date (before any trades on that date)."""
         # For the first trade, use initial investment
@@ -395,10 +414,10 @@ class MockTrade:
             if trade_date in prices.index:
                 trade_price = prices.loc[trade_date]
 
-                # Convert percentage-based trades to volume-based using current price and symbol position
+                # Convert percentage-based trades to volume-based using current holdings
                 if trade.percentage is not None and trade.volume is None:
-                    symbol_value = self._get_symbol_value_at_date(symbol, trade_date)
-                    trade.convert_percentage_to_volume(trade_price, symbol_value)
+                    symbol_holdings = self._get_symbol_holdings_at_date(symbol, trade_date)
+                    trade.convert_percentage_to_volume(symbol_holdings)
 
                 volume = trade.volume
                 action = "BUY" if volume > 0 else "SELL"

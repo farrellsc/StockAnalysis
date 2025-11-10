@@ -31,7 +31,7 @@ class Trade:
     index: int
     symbol: str
     date: str  # datetime to perform the trade, e.g. '2025-01-01'
-    volume: Optional[int] = None  # amount of stocks to buy (positive) / sell (negative)
+    volume: Optional[float] = None  # amount of stocks to buy (positive) / sell (negative)
     cash_amount: Optional[float] = None  # amount of cash to invest (positive) / divest (negative)
     percentage: Optional[float] = None  # percentage of portfolio to invest (positive) / divest (negative)
     desc: Optional[str] = None
@@ -85,36 +85,22 @@ class Trade:
                 if math.isnan(raw_volume):
                     raise ValueError(f"Cannot calculate volume: cash_amount={self.cash_amount}, price={price}")
 
-                self.volume = int(raw_volume)  # Round down to whole shares
+                self.volume = raw_volume  # Keep as float for fractional shares
 
             # Clear cash_amount since we now have volume
             self.cash_amount = None
 
-    def convert_percentage_to_volume(self, price: float, portfolio_value: float):
-        """Convert percentage to volume using the given price and portfolio value"""
+    def convert_percentage_to_volume(self, reference_volume: float):
+        """Convert percentage to volume by taking the specified percentage of a reference volume"""
         import math
 
         if self.percentage is not None and self.volume is None:
-            if price <= 0:
-                raise ValueError(f"Invalid price {price} for converting percentage to volume")
+            if reference_volume <= 0:
+                raise ValueError(f"Invalid reference volume {reference_volume} for converting percentage to volume")
 
-            if portfolio_value <= 0:
-                raise ValueError(f"Invalid portfolio value {portfolio_value} for converting percentage to volume")
-
-            # Calculate cash amount from percentage
-            cash_amount = (self.percentage / 100.0) * portfolio_value
-
-            # Handle infinite percentage
-            if math.isinf(self.percentage):
-                if self.percentage > 0:  # Positive infinity
-                    self.volume = INF
-                else:  # Negative infinity
-                    self.volume = -INF
-            else:
-                # Calculate volume from cash amount
-                raw_volume = cash_amount / price
-
-                self.volume = int(raw_volume)  # Round down to whole shares
+            # Calculate volume as percentage of reference volume
+            raw_volume = (self.percentage / 100.0) * reference_volume
+            self.volume = raw_volume  # Keep as float for fractional shares
 
             # Clear percentage since we now have volume
             self.percentage = None
