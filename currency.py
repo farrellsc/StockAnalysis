@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 
 CURRENCY_REGISTRY = {}
@@ -16,6 +16,8 @@ class BaseCurrency:
     value: float
 
     def to_currency(self, dest):
+        if dest.__class__ == self.__class__:
+            return self
         return CURRENCY_REGISTRY[dest](self.amount * CURRENCY_REGISTRY[self.__class__.__name__].value / CURRENCY_REGISTRY[dest].value)
 
     def __sign__(self):
@@ -31,7 +33,61 @@ class BaseCurrency:
         return int(self.amount)
 
     def __float__(self):
-        return self.amount
+        return float(self.amount)
+
+    def __gt__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount > other.amount
+
+    def __lt__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount < other.amount
+
+    def __ge__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount >= other.amount
+
+    def __le__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount <= other.amount
+
+    def __eq__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount == other.amount
+
+    def __ne__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, float) or isinstance(other, int):
+            other = self.__class__(amount=other)
+        return self.to_currency(other.__class__.__name__).amount != other.amount
+
+    def __add__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, int) or isinstance(other, float):
+            return self.__class__(amount=self.amount + other)
+        else:
+            return self.__class__(amount=self.amount+other.to_currency(self.__class__.__name__).amount)
+
+    def __sub__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, int) or isinstance(other, float):
+            return self.__class__(amount=self.amount - other)
+        else:
+            return self.__class__(amount=self.amount-other.to_currency(self.__class__.__name__).amount)
+
+    def __mul__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, int) or isinstance(other, float):
+            return self.__class__(amount=self.amount * other)
+        else:
+            return self.__class__(amount=self.amount*other.to_currency(self.__class__.__name__).amount)
+
+    def __truediv__(self, other: Union["BaseCurrency", int, float]):
+        if isinstance(other, int) or isinstance(other, float):
+            return self.__class__(amount=self.amount / other)
+        else:
+            return self.__class__(amount=self.amount/other.to_currency(self.__class__.__name__).amount)
 
 @dataclass
 @register_currency
