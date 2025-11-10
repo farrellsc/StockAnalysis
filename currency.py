@@ -27,6 +27,12 @@ class BaseCurrency:
     def __repr__(self):
         return f"{self.__sign__()}{self.amount}"
 
+    def __int__(self):
+        return int(self.amount)
+
+    def __float__(self):
+        return self.amount
+
 @dataclass
 @register_currency
 class USD(BaseCurrency):

@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pandas import DataFrame
 import json
+
+from currency import BaseCurrency
 from utils import INF
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -32,7 +34,7 @@ class Trade:
     symbol: str
     date: str  # datetime to perform the trade, e.g. '2025-01-01'
     volume: Optional[float] = None  # amount of stocks to buy (positive) / sell (negative)
-    cash_amount: Optional[float] = None  # amount of cash to invest (positive) / divest (negative)
+    cash_amount: Optional[BaseCurrency] = None  # amount of cash to invest (positive) / divest (negative)
     percentage: Optional[float] = None  # percentage of portfolio to invest (positive) / divest (negative)
     desc: Optional[str] = None
 
@@ -112,19 +114,17 @@ class MockPortfolio:
 
 
 @dataclass
+class Holding:
+    symbol: str
+    volume: float
+
+
+@dataclass
 class Position:
     """Represents a portfolio position with all holdings and metrics"""
-    holdings: Dict[str, Dict]  # symbol -> holding details
-    cash: float
-    total_invested: float
-    total_divested: float
-    total_portfolio_value: float
-    total_value: float  # cash + portfolio value
-    total_unrealized_pnl: float
-    total_return_rate: float
-    cumulative_invested: float
-    total_trades: int
-    summary: str
+    holdings: Dict[str, Holding]  # symbol -> holding details
+    cash: BaseCurrency
+    date: str
 
     def merge(self, other: 'Position', name: str = "Combined") -> 'Position':
         """
