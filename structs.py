@@ -322,11 +322,20 @@ class Position:
 @dataclass
 class Portfolio:
     name: str
-    cash: BaseCurrency
+    cash: float
     percent: float
     portfolio: Dict[str, float]  # symbol -> allocation percentage
+    records: List[Dict]  # list of timestamped holdings
+    currency: str = "USD"  # Portfolio currency (USD, CNY, etc.)
+    _conversion_skipped: bool = False  # Internal flag to control conversion
 
     def __post_init__(self):
+        """Validate that all timestamps in records are business days and convert Chinese portfolio amounts"""
+        # Currency conversion for Chinese portfolios (unless skipped)
+        if not self._conversion_skipped:
+            if self.currency == "CNY" and self._is_chinese_portfolio():
+                self._convert_chinese_amounts_to_usd()
+
         # Validate business days
         for record in self.records:
             if "time" in record:
@@ -336,6 +345,101 @@ class Portfolio:
                     assert timestamp.weekday() < 5, f"Timestamp {record['time']} is not a business day (weekday: {timestamp.weekday()})"
                 except ValueError as e:
                     raise ValueError(f"Invalid timestamp format in record: {record['time']}. Expected format: YYYY-MM-DD HH:MM:SS") from e
+
+    def _is_chinese_portfolio(self) -> bool:
+        """Check if this is a Chinese portfolio based on symbols in portfolio allocation or records"""
+        # Check portfolio allocation symbols
+        for symbol in self.portfolio.keys():
+            if symbol.startswith('SH') or symbol.startswith('SZ'):
+                return True
+
+        # Check symbols in trade records
+        for record in self.records:
+            for key in record.keys():
+                if key != "time" and (key.startswith('SH') or key.startswith('SZ')):
+                    return True
+
+        return False
+
+    def _get_cny_to_usd_rate(self, date: str = None) -> float:
+        """Get CNY to USD exchange rate for a specific date. Falls back to approximate rate if no data."""
+        # Approximate CNY/USD rate (you might want to fetch real-time or historical data)
+        # As of recent years, roughly 1 USD = 7.0-7.3 CNY, so 1 CNY = ~0.14 USD
+
+        if date:
+            # Try to get historical rate for the specific date
+            # This is a simplified implementation - in production you'd want to fetch real rates
+            try:
+                # You could integrate with forex APIs here
+                # For now, use approximate historical rates
+                date_obj = datetime.strptime(date, "%Y-%m-%d")
+                year = date_obj.year
+
+                # Approximate historical rates
+                if year >= 2024:
+                    return 0.138  # ~1/7.25
+                elif year >= 2022:
+                    return 0.148  # ~1/6.75
+                elif year >= 2020:
+                    return 0.143  # ~1/7.0
+                else:
+                    return 0.145  # ~1/6.9
+            except:
+                pass
+
+        # Default current approximate rate
+        return 0.138  # ~1/7.25 USD per CNY
+
+    def _convert_chinese_amounts_to_usd(self):
+        """Convert Chinese portfolio cash and trade amounts from CNY to USD"""
+        if self.currency == "CNY":
+            # Convert cash amount using current rate
+            current_rate = self._get_cny_to_usd_rate()
+            original_cash = self.cash
+            self.cash = self.cash * current_rate
+
+            print(f"🔄 Converting Chinese portfolio '{self.name}' from CNY to USD:")
+            print(f"   Cash: ¥{original_cash:,.2f} → ${self.cash:,.2f} (rate: {current_rate:.4f})")
+
+            # Convert trade record amounts using historical rates
+            converted_records = 0
+            for record in self.records:
+                if "time" in record:
+                    record_date = datetime.strptime(record["time"], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+                    rate = self._get_cny_to_usd_rate(record_date)
+
+                    for symbol, amount in record.items():
+                        if symbol != "time" and isinstance(amount, (int, float)):
+                            original_amount = amount
+                            record[symbol] = amount * rate
+                            converted_records += 1
+
+            print(f"   Converted {converted_records} trade record amounts using historical rates")
+
+            # Update currency designation
+            self.currency = "USD"
+
+    def convert_currency(self, target_currency: str):
+        """
+        Manually convert portfolio to target currency.
+
+        Args:
+            target_currency: Target currency code (e.g., "USD")
+        """
+        if target_currency == "USD" and self.currency == "CNY":
+            self._convert_chinese_amounts_to_usd()
+            self._conversion_skipped = False
+            print(f"✅ Portfolio converted from CNY to USD")
+        elif target_currency == self.currency:
+            print(f"Portfolio is already in {self.currency}, no conversion needed")
+        else:
+            supported_conversions = "CNY -> USD"
+            raise ValueError(f"Unsupported currency conversion: {self.currency} -> {target_currency}. "
+                           f"Currently supported: {supported_conversions}")
+
+    def convert_to_usd(self):
+        """Convenience method to convert to USD (backward compatibility)"""
+        self.convert_currency("USD")
 
     @classmethod
     def from_file(cls, filename: str, convert_currency: Optional[str] = None):
@@ -350,12 +454,21 @@ class Portfolio:
         """
         content = json.load(open(PORTFOLIO_DIR + "/" + filename + ".json"))
 
+        # Detect original currency from file or auto-detect
+        original_currency = content.get("currency", "USD")
+
+        # Determine if conversion should be skipped before creating instance
+        conversion_skipped = convert_currency is None
+
         # Create portfolio instance with conversion flag set
         portfolio = cls(
             name=filename,
             cash=content.get("cash", 0),
             percent=content.get("percent", 0),
             portfolio=content.get("portfolio", {}),
+            records=content.get("records", []),
+            currency=original_currency,
+            _conversion_skipped=conversion_skipped,
         )
 
         return portfolio
@@ -365,5 +478,218 @@ class Portfolio:
             "cash": self.cash,
             "percent": self.percent,
             "portfolio": self.portfolio,
+            "records": self.records,
+            "currency": self.currency
         }
         json.dump(content, open(PORTFOLIO_DIR + "/" + self.name + ".json", "w"), indent=2)
+
+    def add_trade_record(self, symbol: str, trade_amount: float, timestamp: str = None):
+        """Add a new trade record for a symbol (positive = buy, negative = sell)"""
+        if timestamp is None:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        record = {
+            "time": timestamp,
+            symbol: trade_amount
+        }
+        self.records.append(record)
+
+    def pretty_print(self):
+        """Print portfolio-specific information."""
+        print(f"\n🎯 Portfolio Configuration: {self.name}")
+        print("=" * 60)
+
+        # Portfolio allocation (from configuration)
+        if self.portfolio:
+            print(f"\n🎯 Target Allocation:")
+            print("-" * 30)
+            for symbol, allocation in self.portfolio.items():
+                print(f"  {symbol:10s}: {allocation:>7.1%}")
+
+        # Investment parameters
+        print(f"\n⚙️  Investment Parameters:")
+        print("-" * 30)
+        currency_symbol = "$" if self.currency == "USD" else "¥" if self.currency == "CNY" else self.currency
+        print(f"  Total Cash: {currency_symbol}{self.cash:>12,.2f} ({self.currency})")
+        print(f"  Investment %: {self.percent:>6.1%}")
+        print(f"  Target Amount: {currency_symbol}{self.cash * self.percent:>8,.2f}")
+
+        # Last update
+        if self.records:
+            latest_time = max(datetime.strptime(record["time"], "%Y-%m-%d %H:%M:%S") for record in self.records)
+            print(f"\n🕒 Last Updated: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        print("=" * 60)
+
+    def _print_position(self, position_data: Position):
+        """Print combined portfolio and position data."""
+        # Print position data
+        position_data.pretty_print(f"Portfolio Position: {self.name}", original_cash=self.cash)
+
+        # Print portfolio-specific configuration
+        self.pretty_print()
+
+    def get_next_trade(self, backend=None, target_date: str = None, print_output: bool = True) -> Dict:
+        """
+        Calculate the next trade to balance portfolio towards target allocation.
+
+        Args:
+            backend: Backend instance for price queries (if None, will create one)
+            target_date (str): Date for price queries in 'YYYY-MM-DD' format (if None, uses today's date)
+            print_output (bool): Whether to print formatted output. Defaults to True.
+
+        Returns:
+            Dict with structure:
+            {
+                'investment_amount': float,  # Amount to invest
+                'trades': {symbol: amount_to_buy},  # Recommended trades
+                'current_allocations': {symbol: current_percentage},
+                'target_allocations': {symbol: target_percentage},
+                'allocation_gaps': {symbol: gap_percentage},
+                'rationale': str  # Explanation of the trade recommendation
+            }
+        """
+        # Get current position data
+        current_position = self.get_current_position(backend=backend, target_date=target_date, print_output=False)
+
+        # Calculate investment amount (percentage of cash)
+        investment_amount = self.cash * self.percent
+
+        # Get current holdings and their allocations
+        current_holdings = current_position.holdings
+        total_portfolio_value = current_position.total_portfolio_value
+
+        # Calculate current allocations as percentages
+        current_allocations = {}
+        for symbol in self.portfolio.keys():
+            if symbol in current_holdings and total_portfolio_value > 0:
+                current_value = current_holdings[symbol].get('current_value', 0)
+                current_allocations[symbol] = current_value / total_portfolio_value
+            else:
+                current_allocations[symbol] = 0.0
+
+        # Calculate allocation gaps (target - current)
+        allocation_gaps = {}
+        for symbol, target_pct in self.portfolio.items():
+            current_pct = current_allocations.get(symbol, 0.0)
+            allocation_gaps[symbol] = target_pct - current_pct
+
+        # Calculate total portfolio value after investment
+        future_portfolio_value = total_portfolio_value + investment_amount
+
+        # Calculate required amounts to reach target allocations
+        target_amounts = {}
+        for symbol, target_pct in self.portfolio.items():
+            target_amount = future_portfolio_value * target_pct
+            current_value = current_holdings.get(symbol, {}).get('current_value', 0)
+            required_investment = max(0, target_amount - current_value)
+            target_amounts[symbol] = required_investment
+
+        # Normalize investments to match available investment amount
+        total_required = sum(target_amounts.values())
+
+        recommended_trades = {}
+        if total_required > 0:
+            # Scale down proportionally if we need more than we have
+            scale_factor = min(1.0, investment_amount / total_required)
+            for symbol, required in target_amounts.items():
+                if required > 0:
+                    recommended_trades[symbol] = required * scale_factor
+        else:
+            # If all targets are met, distribute equally among underweight positions
+            underweight_symbols = [s for s, gap in allocation_gaps.items() if gap > 0]
+            if underweight_symbols:
+                equal_amount = investment_amount / len(underweight_symbols)
+                for symbol in underweight_symbols:
+                    recommended_trades[symbol] = equal_amount
+
+        # Generate rationale
+        rationale_parts = []
+        rationale_parts.append(f"Investment amount: ${investment_amount:,.2f} ({self.percent:.1%} of ${self.cash:,.2f} cash)")
+
+        # Sort gaps by magnitude for reporting
+        sorted_gaps = sorted(allocation_gaps.items(), key=lambda x: abs(x[1]), reverse=True)
+
+        overweight = [(s, g) for s, g in sorted_gaps if g < -0.01]  # More than 1% overweight
+        underweight = [(s, g) for s, g in sorted_gaps if g > 0.01]   # More than 1% underweight
+
+        if overweight:
+            rationale_parts.append(f"Overweight positions: {', '.join([f'{s} ({g:+.1%})' for s, g in overweight])}")
+
+        if underweight:
+            rationale_parts.append(f"Underweight positions: {', '.join([f'{s} ({g:+.1%})' for s, g in underweight])}")
+
+        if recommended_trades:
+            trade_summary = [f"{symbol}: ${amount:,.2f}" for symbol, amount in recommended_trades.items() if amount > 0]
+            rationale_parts.append(f"Recommended trades: {', '.join(trade_summary)}")
+        else:
+            rationale_parts.append("No trades recommended - portfolio is balanced")
+
+        result = {
+            'investment_amount': investment_amount,
+            'trades': recommended_trades,
+            'current_allocations': current_allocations,
+            'target_allocations': self.portfolio.copy(),
+            'allocation_gaps': allocation_gaps,
+            'rationale': '. '.join(rationale_parts)
+        }
+
+        # Print formatted output if requested
+        if print_output:
+            self._print_next_trade(result)
+
+        return result
+
+    def _print_next_trade(self, trade_data: Dict):
+        """Print next trade recommendation in a pretty format."""
+        print(f"\n🎯 Next Trade Recommendation: {self.name}")
+        print("=" * 80)
+
+        investment_amount = trade_data['investment_amount']
+        trades = trade_data['trades']
+        current_allocations = trade_data['current_allocations']
+        target_allocations = trade_data['target_allocations']
+        allocation_gaps = trade_data['allocation_gaps']
+
+        print(f"💰 Investment Amount: ${investment_amount:,.2f}")
+        print(f"📊 Cash Percentage Used: {self.percent:.1%}")
+
+        # Allocation comparison table
+        print(f"\n📈 Allocation Analysis:")
+        print("-" * 70)
+        print(f"{'Symbol':<8} {'Current':<10} {'Target':<10} {'Gap':<10} {'Recommended':<12}")
+        print("-" * 70)
+
+        for symbol in target_allocations.keys():
+            current_pct = current_allocations.get(symbol, 0)
+            target_pct = target_allocations[symbol]
+            gap = allocation_gaps[symbol]
+            recommended = trades.get(symbol, 0)
+
+            current_str = f"{current_pct:.1%}"
+            target_str = f"{target_pct:.1%}"
+            gap_str = f"{gap:+.1%}"
+            recommended_str = f"${recommended:,.0f}" if recommended > 0 else "-"
+
+            # Add indicators
+            if abs(gap) > 0.01:  # More than 1% gap
+                if gap > 0:
+                    gap_str += " ⬇"  # Underweight
+                else:
+                    gap_str += " ⬆"  # Overweight
+            else:
+                gap_str += " ✓"  # Balanced
+
+            print(f"{symbol:<8} {current_str:<10} {target_str:<10} {gap_str:<10} {recommended_str:<12}")
+
+        print("-" * 70)
+
+        # Summary
+        total_recommended = sum(trades.values())
+        print(f"{'TOTAL':<8} {'':<10} {'100.0%':<10} {'':<10} ${total_recommended:,.0f}")
+
+        # Rationale
+        print(f"\n💡 Rationale:")
+        print(f"   {trade_data['rationale']}")
+
+        print("=" * 80)
