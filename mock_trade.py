@@ -457,7 +457,7 @@ class MockTrade:
                         print(f"WARNING: Buy order clipped - trying to buy {volume} {symbol} but only have ${current_cash:.2f} cash")
                         print(f"         Adjusted to buy {actual_volume} shares instead (${trade_value:.2f})")
                     elif clip_reason.startswith("sell_holdings"):
-                        holdings_before_trade = int(clip_reason.split("_")[-1])
+                        holdings_before_trade = int(float(clip_reason.split("_")[-1]))
                         print(f"WARNING: Sell order clipped - trying to sell {abs(volume)} {symbol} but only have {holdings_before_trade} shares")
                         print(f"         Adjusted to sell {abs(actual_volume)} shares instead")
 
